@@ -38,6 +38,16 @@ impl AngularVelocity {
     }
 
     #[inline(always)]
+    pub const fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+
+    #[inline(always)]
+    pub const fn raw_magnitude(self) -> u32 {
+        self.0.unsigned_abs()
+    }
+
+    #[inline(always)]
     pub fn to_radians_per_second(self) -> f64 {
         self.0 as f64 / Self::SCALE as f64
     }

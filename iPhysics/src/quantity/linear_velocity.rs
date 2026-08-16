@@ -32,6 +32,21 @@ impl LinearVelocity {
     }
 
     #[inline(always)]
+    pub const fn is_zero(self) -> bool {
+        let [x, y] = self.raw();
+        x == 0 && y == 0
+    }
+
+    /// Squared raw Q24 magnitude. The result has 48 fractional bits.
+    #[inline(always)]
+    pub const fn raw_sqr_magnitude(self) -> u64 {
+        let [x, y] = self.raw();
+        let x = x as i64;
+        let y = y as i64;
+        (x * x) as u64 + (y * y) as u64
+    }
+
+    #[inline(always)]
     pub fn to_meters_per_second(self) -> [f64; 2] {
         self.0.to_f64(Self::FRACTION_BITS)
     }

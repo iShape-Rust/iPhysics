@@ -31,6 +31,12 @@ impl LinearAcceleration {
     }
 
     #[inline(always)]
+    pub const fn is_zero(self) -> bool {
+        let [x, y] = self.raw();
+        x == 0 && y == 0
+    }
+
+    #[inline(always)]
     pub fn to_meters_per_second_squared(self) -> [f64; 2] {
         self.0.to_f64(Self::FRACTION_BITS)
     }

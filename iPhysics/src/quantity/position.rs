@@ -1,6 +1,7 @@
 use super::linear_velocity::LinearVelocity;
 use super::raw::RawVec2;
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
+use i_float::int::point::IntPoint;
 
 /// World-space position in metres, stored as signed Q16 components.
 ///
@@ -34,6 +35,19 @@ impl Position {
         self.0.raw()
     }
 
+    /// Returns the raw Q16 coordinates as an `i_float` point.
+    #[inline(always)]
+    pub const fn raw_point(self) -> IntPoint<i32> {
+        let [x, y] = self.raw();
+        IntPoint { x, y }
+    }
+
+    /// Creates a position from raw Q16 `i_float` coordinates.
+    #[inline(always)]
+    pub const fn from_raw_point(point: IntPoint<i32>) -> Self {
+        Self::from_raw(point.x, point.y)
+    }
+
     #[inline(always)]
     pub fn to_meters(self) -> [f64; 2] {
         self.0.to_f64(Self::FRACTION_BITS)
@@ -46,5 +60,19 @@ impl Position {
             velocity.raw_vec(),
             VELOCITY_TO_POSITION_SHIFT,
         )?))
+    }
+}
+
+impl From<Position> for IntPoint<i32> {
+    #[inline(always)]
+    fn from(position: Position) -> Self {
+        position.raw_point()
+    }
+}
+
+impl From<IntPoint<i32>> for Position {
+    #[inline(always)]
+    fn from(point: IntPoint<i32>) -> Self {
+        Self::from_raw_point(point)
     }
 }
