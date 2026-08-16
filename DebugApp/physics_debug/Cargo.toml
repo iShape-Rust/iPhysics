@@ -1,0 +1,9 @@
+[package]
+name = "physics_debug"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+eframe = "^0.34.0"
+i_physics = { path = "../../iPhysics" }
