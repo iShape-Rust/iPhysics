@@ -1,0 +1,15 @@
+[package]
+name = "i_physics"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nail Sharipov <nailxsharipov@gmail.com>"]
+description = "Deterministic 2D physics engine for Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/iShape-Rust/iTriangle"
+
+
+
+[dependencies]
+
+
+i_triangle = { path = "../../iTriangle/iTriangle" }
