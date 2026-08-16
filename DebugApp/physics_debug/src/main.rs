@@ -161,6 +161,7 @@ impl PhysicsDebugApp {
 
         ui.separator();
         ui.monospace(format!("tick              {}", self.tick));
+        ui.monospace(format!("bodies            {}", self.world.body_count()));
         ui.monospace(format!("tested pairs      {}", self.stats.tested_pairs));
         ui.monospace(format!("AABB pairs        {}", self.stats.aabb_pairs));
         ui.monospace(format!("contacts          {}", self.stats.contacts));
@@ -213,7 +214,7 @@ impl PhysicsDebugApp {
             .handle_input(ui, &response, rect, &mut self.camera);
         self.grid.paint(&painter, rect, &self.camera);
 
-        for body in self.world.bodies() {
+        for (id, body) in self.world.bodies() {
             let [x, y] = body.state().transform().position.to_meters();
             let center = self
                 .camera
@@ -233,7 +234,7 @@ impl PhysicsDebugApp {
             painter.text(
                 center + Vec2::new(0.0, -radius - 5.0),
                 Align2::CENTER_BOTTOM,
-                body.id().raw().to_string(),
+                format!("{}:{}", id.index(), id.revision()),
                 FontId::monospace(11.0),
                 color,
             );
@@ -281,7 +282,7 @@ impl PhysicsDebugApp {
             } else {
                 Color32::from_rgb(255, 93, 117)
             };
-            for body in replay.world.bodies() {
+            for (_id, body) in replay.world.bodies() {
                 let [x, y] = body.state().transform().position.to_meters();
                 let center = self
                     .camera
@@ -361,7 +362,7 @@ impl PhysicsDebugApp {
         if let Some(replay) = &mut self.replay {
             match replay.world.step() {
                 Ok(replay_stats) => {
-                    replay.matched = self.world.bodies() == replay.world.bodies()
+                    replay.matched = self.world.bodies().eq(replay.world.bodies())
                         && self.world.contacts() == replay.world.contacts()
                         && self.stats == replay_stats;
                     if !replay.matched && replay.mismatch_tick.is_none() {
@@ -406,7 +407,7 @@ fn build_world(scenario: Scenario) -> World {
             let mut world = World::default();
             add(
                 &mut world,
-                dynamic(1, 0.0, 5.0, 0.5, 0.0, 0.0, Material::INELASTIC),
+                dynamic(0.0, 5.0, 0.5, 0.0, 0.0, Material::INELASTIC),
             );
             world
         }
@@ -414,37 +415,37 @@ fn build_world(scenario: Scenario) -> World {
             let mut world = zero_gravity_world();
             add(
                 &mut world,
-                dynamic(1, -3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
+                dynamic(-3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
             );
             add(
                 &mut world,
-                dynamic(2, 3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
+                dynamic(3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
             );
             world
         }
         Scenario::SleepOnSupport => {
             let mut world = World::default();
-            add(&mut world, static_support(100));
+            add(&mut world, static_support());
             add(
                 &mut world,
-                dynamic(1, 0.0, 4.0, 0.5, 0.0, 0.0, Material::INELASTIC),
+                dynamic(0.0, 4.0, 0.5, 0.0, 0.0, Material::INELASTIC),
             );
             world
         }
         Scenario::CirclePile => {
             let mut world = World::default();
-            add(&mut world, static_support(100));
-            for (id, x, y) in [
-                (1, -1.05, 0.15),
-                (2, 0.0, 0.15),
-                (3, 1.05, 0.15),
-                (4, -0.53, 1.10),
-                (5, 0.53, 1.10),
-                (6, 0.0, 2.05),
+            add(&mut world, static_support());
+            for (x, y) in [
+                (-1.05, 0.15),
+                (0.0, 0.15),
+                (1.05, 0.15),
+                (-0.53, 1.10),
+                (0.53, 1.10),
+                (0.0, 2.05),
             ] {
                 add(
                     &mut world,
-                    dynamic(id, x, y, 0.5, 0.0, 0.0, Material::INELASTIC),
+                    dynamic(x, y, 0.5, 0.0, 0.0, Material::INELASTIC),
                 );
             }
             world
@@ -453,15 +454,15 @@ fn build_world(scenario: Scenario) -> World {
             let mut world = zero_gravity_world();
             add(
                 &mut world,
-                dynamic(1, -3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
+                dynamic(-3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
             );
             add(
                 &mut world,
-                dynamic(2, 3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
+                dynamic(3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
             );
             add(
                 &mut world,
-                dynamic(3, 0.0, 3.0, 0.45, 0.0, -1.25, Material::ELASTIC),
+                dynamic(0.0, 3.0, 0.45, 0.0, -1.25, Material::ELASTIC),
             );
             world
         }
@@ -472,9 +473,8 @@ fn zero_gravity_world() -> World {
     World::new(WorldSettings::new(LinearAcceleration::ZERO))
 }
 
-fn dynamic(id: u32, x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Material) -> Body {
+fn dynamic(x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Material) -> Body {
     Body::dynamic(
-        BodyId::new(id),
         Circle::new(Length::from_meters(radius).expect("scenario radius must fit"))
             .expect("scenario radius must be positive"),
         Mass::ONE,
@@ -490,9 +490,8 @@ fn dynamic(id: u32, x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Mat
     )
 }
 
-fn static_support(id: u32) -> Body {
+fn static_support() -> Body {
     Body::static_body(
-        BodyId::new(id),
         Circle::new(Length::from_meters(100.0).unwrap()).unwrap(),
         Material::INELASTIC,
         BodyState::new(
@@ -503,8 +502,10 @@ fn static_support(id: u32) -> Body {
     )
 }
 
-fn add(world: &mut World, body: Body) {
-    world.add_body(body).expect("scenario IDs must be unique");
+fn add(world: &mut World, body: Body) -> BodyId {
+    world
+        .add_body(body)
+        .expect("scenario must fit body store capacity")
 }
 
 fn legend(ui: &mut egui::Ui, color: Color32, text: &str) {
@@ -552,9 +553,8 @@ mod tests {
         for tick in 0..256 {
             let reference_stats = reference.step().unwrap();
             let replay_stats = replay.step().unwrap();
-            assert_eq!(
-                reference.bodies(),
-                replay.bodies(),
+            assert!(
+                reference.bodies().eq(replay.bodies()),
                 "body mismatch at tick {tick}"
             );
             assert_eq!(
@@ -575,7 +575,10 @@ mod tests {
 
         for _ in 0..512 {
             world.step().unwrap();
-            if world.body(BodyId::new(1)).unwrap().state().is_sleeping() {
+            if world
+                .bodies()
+                .any(|(_, body)| body.is_dynamic() && body.state().is_sleeping())
+            {
                 return;
             }
         }
