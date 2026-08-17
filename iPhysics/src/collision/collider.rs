@@ -2,7 +2,7 @@ use super::{Contact, collide_circles};
 use crate::body::BodyId;
 use crate::collider::{Circle, Collider, Convex};
 use crate::geometry::UnitVector;
-use crate::quantity::{Length, Position};
+use crate::quantity::{Length, Position, RawWideVec2};
 use crate::transform::Transform;
 
 pub(crate) fn collide(
@@ -116,9 +116,7 @@ fn collide_circle_convex(
         .iter()
         .copied()
         .min_by_key(|vertex| squared_distance(*vertex, circle_center))?;
-    let [cx, cy] = circle_center.raw();
-    let [vx, vy] = closest.raw();
-    if let Some(axis) = normalized(vx as i64 - cx as i64, vy as i64 - cy as i64) {
+    if let Some(axis) = normalized(closest - circle_center) {
         select_circle_axis(
             &mut best,
             axis,
@@ -250,35 +248,26 @@ fn offset(point: Position, axis: UnitVector, distance: i64) -> Option<Position> 
 }
 
 fn dot(point: Position, axis: UnitVector) -> i64 {
-    let [x, y] = point.raw();
-    let [nx, ny] = axis.raw();
-    round_shift(x as i128 * nx as i128 + y as i128 * ny as i128, 30) as i64
+    let point = RawWideVec2::from(point.raw());
+    let axis = RawWideVec2::from(axis.raw());
+    round_shift(point.dot(axis), 30) as i64
 }
 
 fn dot_delta(a: Position, b: Position, axis: UnitVector) -> i64 {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    let [nx, ny] = axis.raw();
-    round_shift(
-        (bx as i128 - ax as i128) * nx as i128 + (by as i128 - ay as i128) * ny as i128,
-        30,
-    ) as i64
+    let axis = RawWideVec2::from(axis.raw());
+    round_shift((b - a).dot(axis), 30) as i64
 }
 
 fn squared_distance(a: Position, b: Position) -> u128 {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    let dx = ax as i128 - bx as i128;
-    let dy = ay as i128 - by as i128;
-    (dx * dx + dy * dy) as u128
+    (a - b).squared_magnitude()
 }
 
-fn normalized(x: i64, y: i64) -> Option<UnitVector> {
-    let squared = (x as i128 * x as i128 + y as i128 * y as i128) as u128;
-    let length = integer_sqrt(squared);
+fn normalized(vector: RawWideVec2) -> Option<UnitVector> {
+    let length = integer_sqrt(vector.squared_magnitude());
     if length == 0 {
         return None;
     }
+    let [x, y] = vector.raw();
     let scale = 1_i128 << UnitVector::FRACTION_BITS;
     Some(UnitVector::from_raw(
         i32::try_from(x as i128 * scale / length as i128).ok()?,

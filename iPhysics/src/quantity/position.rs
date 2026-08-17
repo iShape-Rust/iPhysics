@@ -1,5 +1,5 @@
 use super::linear_velocity::LinearVelocity;
-use super::raw::RawVec2;
+use super::raw::{RawVec2, RawWideVec2};
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
 use i_float::int::point::IntPoint;
 
@@ -63,6 +63,18 @@ impl Position {
     }
 }
 
+impl core::ops::Sub for Position {
+    type Output = RawWideVec2;
+
+    /// Returns the exact raw Q16 displacement `self - rhs`.
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self::Output {
+        let [x, y] = self.raw();
+        let [rhs_x, rhs_y] = rhs.raw();
+        RawWideVec2::from_raw(x as i64 - rhs_x as i64, y as i64 - rhs_y as i64)
+    }
+}
+
 impl From<Position> for IntPoint<i32> {
     #[inline(always)]
     fn from(position: Position) -> Self {
@@ -74,5 +86,24 @@ impl From<IntPoint<i32>> for Position {
     #[inline(always)]
     fn from(point: IntPoint<i32>) -> Self {
         Self::from_raw_point(point)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subtraction_widens_before_operating() {
+        let max = Position::from_raw(i32::MAX, i32::MIN);
+        let min = Position::from_raw(i32::MIN, i32::MAX);
+
+        assert_eq!(
+            (max - min).raw(),
+            [
+                i32::MAX as i64 - i32::MIN as i64,
+                i32::MIN as i64 - i32::MAX as i64
+            ]
+        );
     }
 }

@@ -43,6 +43,54 @@ impl RawVec2 {
     }
 }
 
+/// Wide raw two-dimensional vector used for exact intermediate geometry.
+///
+/// `Position - Position` produces this type in Q16. Components are widened
+/// before subtraction, so the complete difference of any two `i32`
+/// coordinates fits without overflow. Other raw fixed-point vectors can use
+/// it too as long as the caller keeps track of their scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct RawWideVec2 {
+    x: i64,
+    y: i64,
+}
+
+impl RawWideVec2 {
+    pub const ZERO: Self = Self { x: 0, y: 0 };
+
+    #[inline(always)]
+    pub const fn from_raw(x: i64, y: i64) -> Self {
+        Self { x, y }
+    }
+
+    #[inline(always)]
+    pub const fn raw(self) -> [i64; 2] {
+        [self.x, self.y]
+    }
+
+    #[inline(always)]
+    pub const fn dot(self, other: Self) -> i128 {
+        self.x as i128 * other.x as i128 + self.y as i128 * other.y as i128
+    }
+
+    #[inline(always)]
+    pub const fn cross(self, other: Self) -> i128 {
+        self.x as i128 * other.y as i128 - self.y as i128 * other.x as i128
+    }
+
+    #[inline(always)]
+    pub const fn squared_magnitude(self) -> u128 {
+        self.dot(self) as u128
+    }
+}
+
+impl From<[i32; 2]> for RawWideVec2 {
+    #[inline(always)]
+    fn from(value: [i32; 2]) -> Self {
+        Self::from_raw(value[0] as i64, value[1] as i64)
+    }
+}
+
 #[inline]
 pub(super) fn quantize_f64(value: f64, fraction_bits: u32) -> Option<i32> {
     if !value.is_finite() {
@@ -95,5 +143,20 @@ pub(super) fn shift_round(value: i64, shift: u32) -> i64 {
         -((-value + half) >> shift)
     } else {
         (value + half) >> shift
+    }
+}
+
+#[cfg(test)]
+mod wide_tests {
+    use super::*;
+
+    #[test]
+    fn wide_dot_and_cross_are_exact() {
+        let a = RawWideVec2::from_raw(3, 4);
+        let b = RawWideVec2::from_raw(-2, 5);
+
+        assert_eq!(a.dot(b), 14);
+        assert_eq!(a.cross(b), 23);
+        assert_eq!(a.squared_magnitude(), 25);
     }
 }

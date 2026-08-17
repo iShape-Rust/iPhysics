@@ -1,5 +1,5 @@
 use crate::geometry::{Aabb, UnitVector};
-use crate::quantity::Position;
+use crate::quantity::{Position, RawWideVec2};
 use crate::transform::{Transform, rotate_fixed};
 
 pub const MAX_CONVEX_VERTICES: usize = 6;
@@ -100,11 +100,9 @@ impl Convex {
 
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
-            let [ax, ay] = storage[i].raw();
-            let [bx, by] = storage[(i + 1) % count].raw();
-            let edge_x = bx as i64 - ax as i64;
-            let edge_y = by as i64 - ay as i64;
-            normals[i] = normalized(edge_y, -edge_x).ok_or(ConvexError::CollinearEdge)?;
+            let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
+            normals[i] = normalized(RawWideVec2::from_raw(edge_y, -edge_x))
+                .ok_or(ConvexError::CollinearEdge)?;
         }
 
         Ok(Self {
@@ -181,27 +179,19 @@ impl core::ops::Deref for TransformedVertices {
 }
 
 fn corner_cross(a: Position, b: Position, c: Position) -> i128 {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    let [cx, cy] = c.raw();
-    (bx as i128 - ax as i128) * (cy as i128 - by as i128)
-        - (by as i128 - ay as i128) * (cx as i128 - bx as i128)
+    (b - a).cross(c - b)
 }
 
 fn edge_cross(a: Position, b: Position, point: Position) -> i128 {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    let [px, py] = point.raw();
-    (bx as i128 - ax as i128) * (py as i128 - ay as i128)
-        - (by as i128 - ay as i128) * (px as i128 - ax as i128)
+    (b - a).cross(point - a)
 }
 
-fn normalized(x: i64, y: i64) -> Option<UnitVector> {
-    let squared = (x as i128 * x as i128 + y as i128 * y as i128) as u128;
-    let length = integer_sqrt(squared);
+fn normalized(vector: RawWideVec2) -> Option<UnitVector> {
+    let length = integer_sqrt(vector.squared_magnitude());
     if length == 0 {
         return None;
     }
+    let [x, y] = vector.raw();
     let scale = 1_i128 << UnitVector::FRACTION_BITS;
     let nx = (x as i128 * scale) / length as i128;
     let ny = (y as i128 * scale) / length as i128;

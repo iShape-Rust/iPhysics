@@ -24,6 +24,7 @@ pub use linear_acceleration::LinearAcceleration;
 pub use linear_velocity::LinearVelocity;
 pub use mass::Mass;
 pub use position::Position;
+pub use raw::RawWideVec2;
 
 /// Number of fixed simulation ticks in one second.
 pub const TICKS_PER_SECOND: u32 = 64;

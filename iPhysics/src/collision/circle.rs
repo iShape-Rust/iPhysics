@@ -16,17 +16,16 @@ pub fn collide_circles(
     center_b: Position,
 ) -> Option<Contact> {
     let [ax, ay] = center_a.raw();
-    let [bx, by] = center_b.raw();
-    let dx = bx as i64 - ax as i64;
-    let dy = by as i64 - ay as i64;
-    let distance_squared = dx * dx + dy * dy;
+    let delta = center_b - center_a;
+    let [dx, dy] = delta.raw();
+    let distance_squared = delta.squared_magnitude();
     let radius_sum = circle_a.radius().raw() as u64 + circle_b.radius().raw() as u64;
 
-    if distance_squared as u64 > radius_sum * radius_sum {
+    if distance_squared > radius_sum as u128 * radius_sum as u128 {
         return None;
     }
 
-    let distance = integer_sqrt(distance_squared as u64);
+    let distance = integer_sqrt(distance_squared);
     let [nx, ny] = if distance == 0 {
         UnitVector::X.raw()
     } else {
@@ -37,7 +36,7 @@ pub fn collide_circles(
         ]
     };
 
-    let penetration = radius_sum - distance;
+    let penetration = radius_sum as u128 - distance;
     let penetration_raw = u32::try_from(penetration).ok()?;
     let contact_offset = circle_a.radius().raw() as i64 - (penetration as i64 >> 1);
     let point_x = ax as i64 + round_shift(nx as i128 * contact_offset as i128, 30) as i64;
@@ -63,12 +62,12 @@ fn round_shift(value: i128, shift: u32) -> i128 {
 }
 
 /// Floor square root with identical results on every target.
-fn integer_sqrt(value: u64) -> u64 {
+fn integer_sqrt(value: u128) -> u128 {
     if value < 2 {
         return value;
     }
 
-    let mut x = 1_u64 << ((64 - value.leading_zeros() as u64 + 1) >> 1);
+    let mut x = 1_u128 << ((128 - value.leading_zeros() as u128 + 1) >> 1);
     loop {
         let next = (x + value / x) >> 1;
         if next >= x {
