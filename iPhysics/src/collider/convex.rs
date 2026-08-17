@@ -187,7 +187,7 @@ fn edge_cross(a: Position, b: Position, point: Position) -> i64 {
 }
 
 fn normalized(vector: DiffVec2) -> Option<UnitVector> {
-    let length = integer_sqrt(vector.squared_magnitude());
+    let length = vector.squared_magnitude().isqrt();
     if length == 0 {
         return None;
     }
@@ -199,20 +199,6 @@ fn normalized(vector: DiffVec2) -> Option<UnitVector> {
         i32::try_from(nx).ok()?,
         i32::try_from(ny).ok()?,
     ))
-}
-
-fn integer_sqrt(value: u64) -> u64 {
-    if value < 2 {
-        return value;
-    }
-    let mut x = 1_u64 << ((64 - value.leading_zeros() as u64 + 1) >> 1);
-    loop {
-        let next = (x + value / x) >> 1;
-        if next >= x {
-            return x;
-        }
-        x = next;
-    }
 }
 
 #[cfg(test)]

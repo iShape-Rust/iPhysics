@@ -25,7 +25,7 @@ pub fn collide_circles(
         return None;
     }
 
-    let distance = integer_sqrt(distance_squared);
+    let distance = distance_squared.isqrt();
     let [nx, ny] = if distance == 0 {
         UnitVector::X.raw()
     } else {
@@ -61,22 +61,6 @@ fn round_shift(value: i64, shift: u32) -> i64 {
         -((-value + half) >> shift)
     } else {
         (value + half) >> shift
-    }
-}
-
-/// Floor square root with identical results on every target.
-fn integer_sqrt(value: u64) -> u64 {
-    if value < 2 {
-        return value;
-    }
-
-    let mut x = 1_u64 << ((64 - value.leading_zeros() as u64 + 1) >> 1);
-    loop {
-        let next = (x + value / x) >> 1;
-        if next >= x {
-            return x;
-        }
-        x = next;
     }
 }
 
