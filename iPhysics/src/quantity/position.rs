@@ -1,24 +1,35 @@
 use super::linear_velocity::LinearVelocity;
-use super::raw::{RawVec2, RawWideVec2};
+use super::raw::{DiffVec2, RawVec2};
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
 use i_float::int::point::IntPoint;
 
 /// World-space position in metres, stored as signed Q16 components.
 ///
 /// - Resolution: `2^-16 m`, approximately `0.000_015_259 m`.
-/// - Storage range: `-32_768 m..32_768 m` (exclusive upper bound).
-/// - Conservative `i_float` geometry range: `-16_384 m..16_384 m`.
+/// - World range: `-16_384 m..16_384 m` (exclusive upper bound).
+/// - Raw range: `-2^30..2^30` (exclusive upper bound).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Position(RawVec2);
 
 impl Position {
     pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
+    pub const MIN_RAW: i32 = -(1 << 30);
+    pub const MAX_RAW: i32 = (1 << 30) - 1;
     pub const ZERO: Self = Self(RawVec2::ZERO);
 
     #[inline(always)]
     pub const fn from_raw(x: i32, y: i32) -> Self {
-        Self(RawVec2::new(x, y))
+        Self(RawVec2::new(clamp_raw(x), clamp_raw(y)))
+    }
+
+    #[inline(always)]
+    pub const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
+        if is_valid_raw(x) && is_valid_raw(y) {
+            Some(Self(RawVec2::new(x, y)))
+        } else {
+            None
+        }
     }
 
     /// Converts metres to Q16, rounding midpoint values away from zero.
@@ -27,7 +38,9 @@ impl Position {
     /// for calculations performed during a simulation step.
     #[inline]
     pub fn from_meters(x: f64, y: f64) -> Option<Self> {
-        Some(Self(RawVec2::from_f64(x, y, Self::FRACTION_BITS)?))
+        let raw = RawVec2::from_f64(x, y, Self::FRACTION_BITS)?;
+        let [x, y] = raw.raw();
+        Self::checked_from_raw(x, y)
     }
 
     #[inline(always)]
@@ -56,22 +69,43 @@ impl Position {
     /// Advances the position by one 64 Hz tick using semi-implicit velocity.
     #[inline]
     pub fn checked_advance(self, velocity: LinearVelocity) -> Option<Self> {
-        Some(Self(self.0.checked_add_shifted(
-            velocity.raw_vec(),
-            VELOCITY_TO_POSITION_SHIFT,
-        )?))
+        let raw = self
+            .0
+            .checked_add_shifted(velocity.raw_vec(), VELOCITY_TO_POSITION_SHIFT)?;
+        let [x, y] = raw.raw();
+        Self::checked_from_raw(x, y)
     }
 }
 
 impl core::ops::Sub for Position {
-    type Output = RawWideVec2;
+    type Output = DiffVec2;
 
     /// Returns the exact raw Q16 displacement `self - rhs`.
     #[inline(always)]
     fn sub(self, rhs: Self) -> Self::Output {
         let [x, y] = self.raw();
         let [rhs_x, rhs_y] = rhs.raw();
-        RawWideVec2::from_raw(x as i64 - rhs_x as i64, y as i64 - rhs_y as i64)
+        let dx = x as i64 - rhs_x as i64;
+        let dy = y as i64 - rhs_y as i64;
+        debug_assert!((-(i32::MAX as i64)..=i32::MAX as i64).contains(&dx));
+        debug_assert!((-(i32::MAX as i64)..=i32::MAX as i64).contains(&dy));
+        DiffVec2::from_raw(dx as i32, dy as i32)
+    }
+}
+
+#[inline(always)]
+const fn is_valid_raw(value: i32) -> bool {
+    value >= Position::MIN_RAW && value <= Position::MAX_RAW
+}
+
+#[inline(always)]
+const fn clamp_raw(value: i32) -> i32 {
+    if value < Position::MIN_RAW {
+        Position::MIN_RAW
+    } else if value > Position::MAX_RAW {
+        Position::MAX_RAW
+    } else {
+        value
     }
 }
 
@@ -98,12 +132,16 @@ mod tests {
         let max = Position::from_raw(i32::MAX, i32::MIN);
         let min = Position::from_raw(i32::MIN, i32::MAX);
 
+        assert_eq!((max - min).raw(), [i32::MAX, -i32::MAX]);
+    }
+
+    #[test]
+    fn raw_constructor_clamps_to_world_boundary() {
         assert_eq!(
-            (max - min).raw(),
-            [
-                i32::MAX as i64 - i32::MIN as i64,
-                i32::MIN as i64 - i32::MAX as i64
-            ]
+            Position::from_raw(i32::MIN, i32::MAX).raw(),
+            [Position::MIN_RAW, Position::MAX_RAW]
         );
+        assert!(Position::checked_from_raw(Position::MIN_RAW, Position::MAX_RAW).is_some());
+        assert!(Position::checked_from_raw(Position::MIN_RAW - 1, 0).is_none());
     }
 }

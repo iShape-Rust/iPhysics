@@ -363,7 +363,8 @@ fn add_position(body: &mut Body, dx: i128, dy: i128) -> Result<(), StepError> {
     let [x, y] = body.state().transform().position.raw();
     let x = i32::try_from(x as i128 + dx).map_err(|_| StepError::PositionOverflow(body.id()))?;
     let y = i32::try_from(y as i128 + dy).map_err(|_| StepError::PositionOverflow(body.id()))?;
-    body.state_mut().transform.position = Position::from_raw(x, y);
+    body.state_mut().transform.position =
+        Position::checked_from_raw(x, y).ok_or(StepError::PositionOverflow(body.id()))?;
     Ok(())
 }
 

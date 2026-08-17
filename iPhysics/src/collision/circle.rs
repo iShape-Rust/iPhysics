@@ -21,7 +21,7 @@ pub fn collide_circles(
     let distance_squared = delta.squared_magnitude();
     let radius_sum = circle_a.radius().raw() as u64 + circle_b.radius().raw() as u64;
 
-    if distance_squared > radius_sum as u128 * radius_sum as u128 {
+    if distance_squared > radius_sum * radius_sum {
         return None;
     }
 
@@ -29,31 +29,34 @@ pub fn collide_circles(
     let [nx, ny] = if distance == 0 {
         UnitVector::X.raw()
     } else {
-        let scale = 1_i128 << UnitVector::FRACTION_BITS;
+        let scale = 1_i64 << UnitVector::FRACTION_BITS;
         [
-            ((dx as i128 * scale) / distance as i128) as i32,
-            ((dy as i128 * scale) / distance as i128) as i32,
+            (dx as i64 * scale / distance as i64) as i32,
+            (dy as i64 * scale / distance as i64) as i32,
         ]
     };
 
-    let penetration = radius_sum as u128 - distance;
+    let penetration = radius_sum - distance;
     let penetration_raw = u32::try_from(penetration).ok()?;
     let contact_offset = circle_a.radius().raw() as i64 - (penetration as i64 >> 1);
-    let point_x = ax as i64 + round_shift(nx as i128 * contact_offset as i128, 30) as i64;
-    let point_y = ay as i64 + round_shift(ny as i128 * contact_offset as i128, 30) as i64;
+    let point_x = ax as i64 + round_shift(nx as i64 * contact_offset, 30);
+    let point_y = ay as i64 + round_shift(ny as i64 * contact_offset, 30);
 
     Some(Contact {
         body_a,
         body_b,
-        point: Position::from_raw(i32::try_from(point_x).ok()?, i32::try_from(point_y).ok()?),
+        point: Position::checked_from_raw(
+            i32::try_from(point_x).ok()?,
+            i32::try_from(point_y).ok()?,
+        )?,
         normal: UnitVector::from_raw(nx, ny),
         penetration: Length::from_raw(penetration_raw),
     })
 }
 
 #[inline(always)]
-fn round_shift(value: i128, shift: u32) -> i128 {
-    let half = 1_i128 << (shift - 1);
+fn round_shift(value: i64, shift: u32) -> i64 {
+    let half = 1_i64 << (shift - 1);
     if value < 0 {
         -((-value + half) >> shift)
     } else {
@@ -62,12 +65,12 @@ fn round_shift(value: i128, shift: u32) -> i128 {
 }
 
 /// Floor square root with identical results on every target.
-fn integer_sqrt(value: u128) -> u128 {
+fn integer_sqrt(value: u64) -> u64 {
     if value < 2 {
         return value;
     }
 
-    let mut x = 1_u128 << ((128 - value.leading_zeros() as u128 + 1) >> 1);
+    let mut x = 1_u64 << ((64 - value.leading_zeros() as u64 + 1) >> 1);
     loop {
         let next = (x + value / x) >> 1;
         if next >= x {

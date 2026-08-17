@@ -2,7 +2,7 @@ use super::{Contact, collide_circles};
 use crate::body::BodyId;
 use crate::collider::{Circle, Collider, Convex};
 use crate::geometry::UnitVector;
-use crate::quantity::{Length, Position, RawWideVec2};
+use crate::quantity::{DiffVec2, Length, Position};
 use crate::transform::Transform;
 
 pub(crate) fn collide(
@@ -222,56 +222,55 @@ fn centroid(vertices: &[Position]) -> Option<Position> {
         x += raw[0] as i64;
         y += raw[1] as i64;
     }
-    Position::from_raw(
+    Position::checked_from_raw(
         i32::try_from(x / vertices.len() as i64).ok()?,
         i32::try_from(y / vertices.len() as i64).ok()?,
     )
-    .into()
 }
 
 fn midpoint(a: Position, b: Position) -> Option<Position> {
     let [ax, ay] = a.raw();
     let [bx, by] = b.raw();
-    Some(Position::from_raw(
+    Position::checked_from_raw(
         i32::try_from((ax as i64 + bx as i64) / 2).ok()?,
         i32::try_from((ay as i64 + by as i64) / 2).ok()?,
-    ))
+    )
 }
 
 fn offset(point: Position, axis: UnitVector, distance: i64) -> Option<Position> {
     let [x, y] = point.raw();
     let [nx, ny] = axis.raw();
-    Some(Position::from_raw(
-        i32::try_from(x as i64 + round_shift(nx as i128 * distance as i128, 30) as i64).ok()?,
-        i32::try_from(y as i64 + round_shift(ny as i128 * distance as i128, 30) as i64).ok()?,
-    ))
+    Position::checked_from_raw(
+        i32::try_from(x as i64 + round_shift_i64(nx as i64 * distance, 30)).ok()?,
+        i32::try_from(y as i64 + round_shift_i64(ny as i64 * distance, 30)).ok()?,
+    )
 }
 
 fn dot(point: Position, axis: UnitVector) -> i64 {
-    let point = RawWideVec2::from(point.raw());
-    let axis = RawWideVec2::from(axis.raw());
-    round_shift(point.dot(axis), 30) as i64
+    let point = DiffVec2::from(point.raw());
+    let axis = DiffVec2::from(axis.raw());
+    round_shift_i64(point.dot(axis), 30)
 }
 
 fn dot_delta(a: Position, b: Position, axis: UnitVector) -> i64 {
-    let axis = RawWideVec2::from(axis.raw());
-    round_shift((b - a).dot(axis), 30) as i64
+    let axis = DiffVec2::from(axis.raw());
+    round_shift_i64((b - a).dot(axis), 30)
 }
 
-fn squared_distance(a: Position, b: Position) -> u128 {
+fn squared_distance(a: Position, b: Position) -> u64 {
     (a - b).squared_magnitude()
 }
 
-fn normalized(vector: RawWideVec2) -> Option<UnitVector> {
+fn normalized(vector: DiffVec2) -> Option<UnitVector> {
     let length = integer_sqrt(vector.squared_magnitude());
     if length == 0 {
         return None;
     }
     let [x, y] = vector.raw();
-    let scale = 1_i128 << UnitVector::FRACTION_BITS;
+    let scale = 1_i64 << UnitVector::FRACTION_BITS;
     Some(UnitVector::from_raw(
-        i32::try_from(x as i128 * scale / length as i128).ok()?,
-        i32::try_from(y as i128 * scale / length as i128).ok()?,
+        i32::try_from(x as i64 * scale / length as i64).ok()?,
+        i32::try_from(y as i64 * scale / length as i64).ok()?,
     ))
 }
 
@@ -280,11 +279,11 @@ fn negate(vector: UnitVector) -> UnitVector {
     UnitVector::from_raw(-x, -y)
 }
 
-fn integer_sqrt(value: u128) -> u128 {
+fn integer_sqrt(value: u64) -> u64 {
     if value < 2 {
         return value;
     }
-    let mut x = 1_u128 << ((128 - value.leading_zeros() + 1) >> 1);
+    let mut x = 1_u64 << ((64 - value.leading_zeros() as u64 + 1) >> 1);
     loop {
         let next = (x + value / x) >> 1;
         if next >= x {
@@ -295,8 +294,8 @@ fn integer_sqrt(value: u128) -> u128 {
 }
 
 #[inline(always)]
-fn round_shift(value: i128, shift: u32) -> i128 {
-    let half = 1_i128 << (shift - 1);
+fn round_shift_i64(value: i64, shift: u32) -> i64 {
+    let half = 1_i64 << (shift - 1);
     if value < 0 {
         -((-value + half) >> shift)
     } else {

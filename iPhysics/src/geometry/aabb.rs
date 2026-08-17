@@ -78,7 +78,11 @@ impl TryFrom<IntRect<i32>> for Aabb {
 
     #[inline(always)]
     fn try_from(rect: IntRect<i32>) -> Result<Self, Self::Error> {
-        if rect.min_x <= rect.max_x && rect.min_y <= rect.max_y {
+        if rect.min_x <= rect.max_x
+            && rect.min_y <= rect.max_y
+            && Position::checked_from_raw(rect.min_x, rect.min_y).is_some()
+            && Position::checked_from_raw(rect.max_x, rect.max_y).is_some()
+        {
             Ok(Self(rect))
         } else {
             Err(())

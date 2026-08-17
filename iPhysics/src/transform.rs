@@ -31,10 +31,10 @@ impl Transform {
     pub fn checked_apply(self, local: Position) -> Option<Position> {
         let [rx, ry] = rotate_fixed(local.raw(), self.angle)?;
         let [tx, ty] = self.position.raw();
-        Some(Position::from_raw(
+        Position::checked_from_raw(
             i32::try_from(tx as i64 + rx as i64).ok()?,
             i32::try_from(ty as i64 + ry as i64).ok()?,
-        ))
+        )
     }
 
     /// Composes a child-local transform with this parent transform.
@@ -137,19 +137,19 @@ pub(crate) fn sin_cos_q30(angle: Angle) -> [i32; 2] {
 pub(crate) fn rotate_fixed(point: [i32; 2], angle: Angle) -> Option<[i32; 2]> {
     let [cos, sin] = sin_cos_q30(angle);
     let x = round_shift(
-        point[0] as i128 * cos as i128 - point[1] as i128 * sin as i128,
+        point[0] as i64 * cos as i64 - point[1] as i64 * sin as i64,
         30,
     );
     let y = round_shift(
-        point[0] as i128 * sin as i128 + point[1] as i128 * cos as i128,
+        point[0] as i64 * sin as i64 + point[1] as i64 * cos as i64,
         30,
     );
     Some([i32::try_from(x).ok()?, i32::try_from(y).ok()?])
 }
 
 #[inline(always)]
-fn round_shift(value: i128, shift: u32) -> i128 {
-    let half = 1_i128 << (shift - 1);
+fn round_shift(value: i64, shift: u32) -> i64 {
+    let half = 1_i64 << (shift - 1);
     if value < 0 {
         -((-value + half) >> shift)
     } else {

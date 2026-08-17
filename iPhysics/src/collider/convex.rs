@@ -1,5 +1,5 @@
 use crate::geometry::{Aabb, UnitVector};
-use crate::quantity::{Position, RawWideVec2};
+use crate::quantity::{DiffVec2, Position};
 use crate::transform::{Transform, rotate_fixed};
 
 pub const MAX_CONVEX_VERTICES: usize = 6;
@@ -101,7 +101,7 @@ impl Convex {
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
-            normals[i] = normalized(RawWideVec2::from_raw(edge_y, -edge_x))
+            normals[i] = normalized(DiffVec2::from_raw(edge_y, -edge_x))
                 .ok_or(ConvexError::CollinearEdge)?;
         }
 
@@ -178,34 +178,34 @@ impl core::ops::Deref for TransformedVertices {
     }
 }
 
-fn corner_cross(a: Position, b: Position, c: Position) -> i128 {
+fn corner_cross(a: Position, b: Position, c: Position) -> i64 {
     (b - a).cross(c - b)
 }
 
-fn edge_cross(a: Position, b: Position, point: Position) -> i128 {
+fn edge_cross(a: Position, b: Position, point: Position) -> i64 {
     (b - a).cross(point - a)
 }
 
-fn normalized(vector: RawWideVec2) -> Option<UnitVector> {
+fn normalized(vector: DiffVec2) -> Option<UnitVector> {
     let length = integer_sqrt(vector.squared_magnitude());
     if length == 0 {
         return None;
     }
     let [x, y] = vector.raw();
-    let scale = 1_i128 << UnitVector::FRACTION_BITS;
-    let nx = (x as i128 * scale) / length as i128;
-    let ny = (y as i128 * scale) / length as i128;
+    let scale = 1_i64 << UnitVector::FRACTION_BITS;
+    let nx = x as i64 * scale / length as i64;
+    let ny = y as i64 * scale / length as i64;
     Some(UnitVector::from_raw(
         i32::try_from(nx).ok()?,
         i32::try_from(ny).ok()?,
     ))
 }
 
-fn integer_sqrt(value: u128) -> u128 {
+fn integer_sqrt(value: u64) -> u64 {
     if value < 2 {
         return value;
     }
-    let mut x = 1_u128 << ((128 - value.leading_zeros() as u128 + 1) >> 1);
+    let mut x = 1_u64 << ((64 - value.leading_zeros() as u64 + 1) >> 1);
     loop {
         let next = (x + value / x) >> 1;
         if next >= x {
