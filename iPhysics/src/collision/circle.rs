@@ -17,7 +17,6 @@ pub fn collide_circles(
 ) -> Option<Contact> {
     let [ax, ay] = center_a.raw();
     let delta = center_b - center_a;
-    let [dx, dy] = delta.raw();
     let distance_squared = delta.squared_magnitude();
     let radius_sum = circle_a.radius().raw() as u64 + circle_b.radius().raw() as u64;
 
@@ -26,15 +25,8 @@ pub fn collide_circles(
     }
 
     let distance = distance_squared.isqrt();
-    let [nx, ny] = if distance == 0 {
-        UnitVector::X.raw()
-    } else {
-        let scale = 1_i64 << UnitVector::FRACTION_BITS;
-        [
-            (dx as i64 * scale / distance as i64) as i32,
-            (dy as i64 * scale / distance as i64) as i32,
-        ]
-    };
+    let normal = UnitVector::normalized_with_length(delta, distance).unwrap_or(UnitVector::X);
+    let [nx, ny] = normal.raw();
 
     let penetration = radius_sum - distance;
     let penetration_raw = u32::try_from(penetration).ok()?;
@@ -49,7 +41,7 @@ pub fn collide_circles(
             i32::try_from(point_x).ok()?,
             i32::try_from(point_y).ok()?,
         )?,
-        normal: UnitVector::from_raw(nx, ny),
+        normal,
         penetration: Length::from_raw(penetration_raw),
     })
 }

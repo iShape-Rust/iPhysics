@@ -101,7 +101,7 @@ impl Convex {
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
-            normals[i] = normalized(DiffVec2::from_raw(edge_y, -edge_x))
+            normals[i] = UnitVector::normalized(DiffVec2::from_raw(edge_y, -edge_x))
                 .ok_or(ConvexError::CollinearEdge)?;
         }
 
@@ -184,21 +184,6 @@ fn corner_cross(a: Position, b: Position, c: Position) -> i64 {
 
 fn edge_cross(a: Position, b: Position, point: Position) -> i64 {
     (b - a).cross(point - a)
-}
-
-fn normalized(vector: DiffVec2) -> Option<UnitVector> {
-    let length = vector.squared_magnitude().isqrt();
-    if length == 0 {
-        return None;
-    }
-    let [x, y] = vector.raw();
-    let scale = 1_i64 << UnitVector::FRACTION_BITS;
-    let nx = x as i64 * scale / length as i64;
-    let ny = y as i64 * scale / length as i64;
-    Some(UnitVector::from_raw(
-        i32::try_from(nx).ok()?,
-        i32::try_from(ny).ok()?,
-    ))
 }
 
 #[cfg(test)]

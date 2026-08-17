@@ -116,7 +116,7 @@ fn collide_circle_convex(
         .iter()
         .copied()
         .min_by_key(|vertex| squared_distance(*vertex, circle_center))?;
-    if let Some(axis) = normalized(closest - circle_center) {
+    if let Some(axis) = UnitVector::normalized(closest - circle_center) {
         select_circle_axis(
             &mut best,
             axis,
@@ -259,19 +259,6 @@ fn dot_delta(a: Position, b: Position, axis: UnitVector) -> i64 {
 
 fn squared_distance(a: Position, b: Position) -> u64 {
     (a - b).squared_magnitude()
-}
-
-fn normalized(vector: DiffVec2) -> Option<UnitVector> {
-    let length = vector.squared_magnitude().isqrt();
-    if length == 0 {
-        return None;
-    }
-    let [x, y] = vector.raw();
-    let scale = 1_i64 << UnitVector::FRACTION_BITS;
-    Some(UnitVector::from_raw(
-        i32::try_from(x as i64 * scale / length as i64).ok()?,
-        i32::try_from(y as i64 * scale / length as i64).ok()?,
-    ))
 }
 
 fn negate(vector: UnitVector) -> UnitVector {
