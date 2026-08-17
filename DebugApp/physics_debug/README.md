@@ -1,7 +1,7 @@
 # iPhysics Debug
 
-Minimal native diagnostics for the circle-only fixed-point physics engine. It
-uses the same `eframe`/`egui` stack as the neighboring iShape Rust debug apps.
+Minimal native diagnostics for the fixed-point circle/convex physics engine.
+It uses the same `eframe`/`egui` stack as neighboring iShape Rust debug apps.
 
 Run from the repository root:
 
