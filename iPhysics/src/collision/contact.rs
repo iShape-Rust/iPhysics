@@ -7,6 +7,9 @@ use crate::quantity::{Length, Position};
 /// A contact deliberately carries no collider variant, composite part index,
 /// or persistent feature identity. Narrow phase discards that information
 /// before handing the result to the solver.
+///
+/// `normal` points from `body_a` toward `body_b`; the solver response applied
+/// to `body_a` therefore acts in the opposite direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Contact {
     pub body_a: BodyId,

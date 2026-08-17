@@ -6,7 +6,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Str
 use grid::Grid;
 use i_physics::{
     Aabb, Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Collider, ColliderPart,
-    CompositeCollider, Convex, Length, LinearAcceleration, LinearVelocity, Mass, Material,
+    CompositeCollider, Contact, Convex, Length, LinearAcceleration, LinearVelocity, Mass, Material,
     Position, StaticBody, StepStats, Transform, World, WorldSettings,
 };
 use std::time::{Duration, Instant};
@@ -221,7 +221,11 @@ impl PhysicsDebugApp {
         legend(ui, Color32::from_rgb(72, 161, 255), "dynamic");
         legend(ui, Color32::from_rgb(78, 211, 183), "sleeping");
         legend(ui, Color32::from_rgb(126, 132, 145), "static");
-        legend(ui, Color32::from_rgb(255, 205, 86), "transient contact");
+        legend(
+            ui,
+            Color32::from_rgb(255, 205, 86),
+            "contact + response normal on A",
+        );
         legend(ui, Color32::from_rgb(106, 226, 125), "AABB");
         ui.small("Mouse wheel: zoom · right/middle drag: pan");
     }
@@ -293,12 +297,8 @@ impl PhysicsDebugApp {
 
         for contact in self.world.contacts() {
             let [x, y] = contact.point.to_meters();
-            let [nx, ny] = contact.normal.raw();
             let point = Pos2::new(x as f32, y as f32);
-            let normal = Vec2::new(
-                nx as f32 / (1_u64 << 30) as f32,
-                ny as f32 / (1_u64 << 30) as f32,
-            );
+            let normal = response_normal_on_body_a(contact);
             let screen_point = self.camera.screen_from_world(rect, point);
             let screen_tip = self.camera.screen_from_world(rect, point + normal * 0.7);
             let color = Color32::from_rgb(255, 205, 86);
@@ -508,6 +508,14 @@ fn paint_body_id(
 fn screen_position(camera: &Camera, rect: Rect, position: Position) -> Pos2 {
     let [x, y] = position.to_meters();
     camera.screen_from_world(rect, Pos2::new(x as f32, y as f32))
+}
+
+/// Contact normals are stored A -> B. The displayed arrow is the solver
+/// response direction applied to A, so static surfaces point outwards.
+fn response_normal_on_body_a(contact: &Contact) -> Vec2 {
+    let [nx, ny] = contact.normal.raw();
+    let scale = (1_u64 << 30) as f32;
+    Vec2::new(-(nx as f32) / scale, -(ny as f32) / scale)
 }
 
 fn build_world(scenario: Scenario) -> World {
@@ -874,6 +882,23 @@ mod tests {
             }
             assert!(contact_seen, "{} produced no contacts", scenario.label());
         }
+    }
+
+    #[test]
+    fn displayed_normal_is_the_response_direction_on_body_a() {
+        let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
+        let contact = i_physics::collision::collide_circles(
+            BodyId::new(1),
+            circle,
+            Position::ZERO,
+            BodyId::new(2),
+            circle,
+            Position::from_meters(2.0, 0.0).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(contact.normal.raw(), [1 << 30, 0]);
+        assert_eq!(response_normal_on_body_a(&contact), Vec2::new(-1.0, 0.0));
     }
 
     #[test]
