@@ -1,7 +1,7 @@
 use super::Contact;
 use crate::body::BodyId;
 use crate::collider::Circle;
-use crate::geometry::UnitVector;
+use crate::geometry::{GeometryPoint, UnitVector};
 use crate::quantity::{Length, Position};
 
 /// Computes a single deterministic circle-circle contact. The normal points
@@ -34,7 +34,10 @@ pub fn collide(
     Some(Contact {
         body_a,
         body_b,
-        point: Position::from_wide_narrow(ax as i64 + offset_x as i64, ay as i64 + offset_y as i64),
+        point: GeometryPoint::from_wide_narrow(
+            ax as i64 + offset_x as i64,
+            ay as i64 + offset_y as i64,
+        ),
         normal,
         penetration: Length::from_raw(penetration_raw),
     })
@@ -93,5 +96,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(contact.point.to_meters(), [-1.0, 0.0]);
+    }
+
+    #[test]
+    fn contact_point_can_extend_beyond_position_range() {
+        let large = Circle::new(Length::from_raw(Position::MAX_RAW as u32)).unwrap();
+        let small = Circle::new(Length::from_raw(1)).unwrap();
+        let center = Position::from_raw(Position::MAX_RAW, Position::MAX_RAW);
+        let contact =
+            collide(BodyId::new(1), large, center, BodyId::new(2), small, center).unwrap();
+
+        assert!(contact.point.raw()[0] > Position::MAX_RAW);
+        assert_eq!(contact.point.raw()[1], Position::MAX_RAW);
     }
 }

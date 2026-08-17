@@ -1,10 +1,8 @@
 use super::Contact;
-use super::sat::{
-    BestAxis, centroid, midpoint, offset, select_circle_axis, squared_distance, support,
-};
+use super::sat::{BestAxis, offset, select_circle_axis, support};
 use crate::body::BodyId;
 use crate::collider::{Circle, Convex};
-use crate::geometry::UnitVector;
+use crate::geometry::{GeometryPoint, UnitVector};
 use crate::quantity::Length;
 use crate::transform::Transform;
 
@@ -17,8 +15,8 @@ pub(super) fn collide(
     convex_transform: Transform,
 ) -> Option<Contact> {
     let vertices = convex.transformed_vertices(convex_transform);
-    let circle_center = circle_transform.position;
-    let convex_center = centroid(&vertices);
+    let circle_center = GeometryPoint::from(circle_transform.position);
+    let convex_center = convex.transformed_center(convex_transform);
     let mut best: BestAxis = None;
 
     for index in 0..convex.len() {
@@ -35,8 +33,8 @@ pub(super) fn collide(
     let closest = vertices
         .iter()
         .copied()
-        .min_by_key(|vertex| squared_distance(*vertex, circle_center))?;
-    if let Some(axis) = UnitVector::normalized(closest - circle_center) {
+        .min_by_key(|vertex| vertex.squared_distance(circle_center))?;
+    if let Some(axis) = UnitVector::normalized_wide(closest.delta(circle_center)) {
         select_circle_axis(
             &mut best,
             axis,
@@ -53,7 +51,7 @@ pub(super) fn collide(
     Some(Contact {
         body_a: circle_body,
         body_b: convex_body,
-        point: midpoint(circle_point, convex_point),
+        point: circle_point.midpoint(convex_point),
         normal,
         penetration: Length::from_raw(penetration),
     })

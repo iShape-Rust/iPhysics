@@ -1,3 +1,4 @@
+use crate::geometry::GeometryPoint;
 use crate::quantity::{Angle, AngularVelocity, LinearVelocity, Position};
 
 /// Position and orientation of a body in world space.
@@ -22,16 +23,27 @@ impl Transform {
         Self { position, angle }
     }
 
-    /// Transforms a Q16 point from local space into world space.
+    /// Transforms a Q16 point into the bounded world-position domain.
     ///
     /// Rotation uses integer CORDIC coefficients, so the result is identical
     /// on every target and does not depend on a platform floating-point
-    /// implementation.
+    /// implementation. Translation saturates at the world boundary because an
+    /// arbitrary local point has no collider-radius invariant.
     #[inline]
     pub fn apply(self, local: Position) -> Position {
         let [rx, ry] = rotate_fixed(local.raw(), self.angle);
         let [tx, ty] = self.position.raw();
-        Position::from_wide_narrow(tx as i64 + rx as i64, ty as i64 + ry as i64)
+        Position::from_wide_saturated(tx as i128 + rx as i128, ty as i128 + ry as i128)
+    }
+
+    /// Transforms a collider-local point into the full-i32 geometry domain.
+    /// Collider construction guarantees the local point's radius, so the
+    /// rotated point plus any valid body position fits without saturation.
+    #[inline]
+    pub(crate) fn apply_geometry(self, local: Position) -> GeometryPoint {
+        let [rx, ry] = rotate_fixed(local.raw(), self.angle);
+        let [tx, ty] = self.position.raw();
+        GeometryPoint::from_wide_narrow(tx as i64 + rx as i64, ty as i64 + ry as i64)
     }
 
     /// Composes a child-local transform with this parent transform.
@@ -68,6 +80,8 @@ pub(crate) fn rotate_fixed(point: [i32; 2], angle: Angle) -> [i32; 2] {
         point[0] as i64 * sin as i64 + point[1] as i64 * cos as i64,
         30,
     );
+    debug_assert!(x >= i32::MIN as i64 && x <= i32::MAX as i64);
+    debug_assert!(y >= i32::MIN as i64 && y <= i32::MAX as i64);
     [x as i32, y as i32]
 }
 
@@ -103,6 +117,19 @@ mod tests {
         assert_eq!(
             transform.apply(Position::from_raw(30, 10)),
             Position::from_raw(90, 230)
+        );
+    }
+
+    #[test]
+    fn arbitrary_point_transformation_saturates_at_world_boundary() {
+        let transform = Transform::new(
+            Position::from_raw(Position::MAX_RAW, Position::MAX_RAW),
+            Angle::ZERO,
+        );
+
+        assert_eq!(
+            transform.apply(Position::from_raw(1, 1)),
+            Position::from_raw(Position::MAX_RAW, Position::MAX_RAW)
         );
     }
 }

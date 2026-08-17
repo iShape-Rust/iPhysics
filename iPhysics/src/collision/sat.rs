@@ -1,15 +1,14 @@
-use crate::geometry::UnitVector;
-use crate::quantity::{DiffVec2, Position};
+use crate::geometry::{GeometryPoint, UnitVector};
 
 pub(super) type BestAxis = Option<(u32, UnitVector)>;
 
 pub(super) fn select_axis(
     best: &mut BestAxis,
     mut axis: UnitVector,
-    a: &[Position],
-    b: &[Position],
-    center_a: Position,
-    center_b: Position,
+    a: &[GeometryPoint],
+    b: &[GeometryPoint],
+    center_a: GeometryPoint,
+    center_b: GeometryPoint,
 ) -> Option<()> {
     if dot_delta(center_a, center_b, axis) < 0 {
         axis = -axis;
@@ -27,10 +26,10 @@ pub(super) fn select_axis(
 pub(super) fn select_circle_axis(
     best: &mut BestAxis,
     mut axis: UnitVector,
-    circle_center: Position,
+    circle_center: GeometryPoint,
     radius: u32,
-    convex: &[Position],
-    convex_center: Position,
+    convex: &[GeometryPoint],
+    convex_center: GeometryPoint,
 ) -> Option<()> {
     if dot_delta(circle_center, convex_center, axis) < 0 {
         axis = -axis;
@@ -47,7 +46,11 @@ pub(super) fn select_circle_axis(
     Some(())
 }
 
-pub(super) fn support(vertices: &[Position], axis: UnitVector, maximum: bool) -> Position {
+pub(super) fn support(
+    vertices: &[GeometryPoint],
+    axis: UnitVector,
+    maximum: bool,
+) -> GeometryPoint {
     let mut result = vertices[0];
     let mut best = dot(result, axis);
     for vertex in &vertices[1..] {
@@ -60,39 +63,13 @@ pub(super) fn support(vertices: &[Position], axis: UnitVector, maximum: bool) ->
     result
 }
 
-pub(super) fn centroid(vertices: &[Position]) -> Position {
-    debug_assert!(!vertices.is_empty());
-    let mut x = 0_i64;
-    let mut y = 0_i64;
-    for vertex in vertices {
-        let raw = vertex.raw();
-        x += raw[0] as i64;
-        y += raw[1] as i64;
-    }
-    let count = vertices.len() as i64;
-    Position::from_raw_unchecked((x / count) as i32, (y / count) as i32)
-}
-
-pub(super) fn midpoint(a: Position, b: Position) -> Position {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    Position::from_raw_unchecked(
-        ((ax as i64 + bx as i64) / 2) as i32,
-        ((ay as i64 + by as i64) / 2) as i32,
-    )
-}
-
-pub(super) fn offset(point: Position, axis: UnitVector, distance: i32) -> Position {
+pub(super) fn offset(point: GeometryPoint, axis: UnitVector, distance: i32) -> GeometryPoint {
     let [x, y] = point.raw();
     let [offset_x, offset_y] = axis.scaled_raw(distance).raw();
-    Position::from_wide_narrow(x as i64 + offset_x as i64, y as i64 + offset_y as i64)
+    GeometryPoint::from_wide_narrow(x as i64 + offset_x as i64, y as i64 + offset_y as i64)
 }
 
-#[inline(always)]
-pub(super) fn squared_distance(a: Position, b: Position) -> u64 {
-    (a - b).squared_magnitude()
-}
-
+#[inline]
 fn update_best(best: &mut BestAxis, overlap: i64, axis: UnitVector) {
     let overlap = overlap as u32;
     if best.is_none_or(|(current, _)| overlap < current) {
@@ -100,7 +77,7 @@ fn update_best(best: &mut BestAxis, overlap: i64, axis: UnitVector) {
     }
 }
 
-fn project(vertices: &[Position], axis: UnitVector) -> (i64, i64) {
+fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
     let first = dot(vertices[0], axis);
     let mut min = first;
     let mut max = first;
@@ -113,12 +90,12 @@ fn project(vertices: &[Position], axis: UnitVector) -> (i64, i64) {
 }
 
 #[inline(always)]
-fn dot(point: Position, axis: UnitVector) -> i64 {
+fn dot(point: GeometryPoint, axis: UnitVector) -> i64 {
     let [x, y] = point.raw();
-    axis.dot_raw(DiffVec2::from_raw_unchecked(x, y))
+    axis.dot_wide_raw([x as i64, y as i64])
 }
 
 #[inline(always)]
-fn dot_delta(a: Position, b: Position, axis: UnitVector) -> i64 {
-    axis.dot_raw(b - a)
+fn dot_delta(a: GeometryPoint, b: GeometryPoint, axis: UnitVector) -> i64 {
+    axis.dot_wide_raw(b.delta(a))
 }

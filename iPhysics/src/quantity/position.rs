@@ -42,19 +42,6 @@ impl Position {
         ))
     }
 
-    /// Creates a position from geometry whose range must fit the world by
-    /// construction. Release builds still saturate defensively.
-    #[inline(always)]
-    pub(crate) const fn from_wide_narrow(x: i64, y: i64) -> Self {
-        debug_assert!(is_valid_wide(x) && is_valid_wide(y));
-        Self(RawVec2::from_i64_saturated(
-            x,
-            y,
-            Self::MIN_RAW,
-            Self::MAX_RAW,
-        ))
-    }
-
     #[inline(always)]
     pub const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
         if is_valid_raw(x) && is_valid_raw(y) {
@@ -108,6 +95,25 @@ impl Position {
             Self::MAX_RAW,
         ))
     }
+
+    /// Returns the component-wise midpoint. The sum is widened before the
+    /// division, and the result is guaranteed to remain inside the world.
+    #[inline(always)]
+    pub const fn midpoint(self, other: Self) -> Self {
+        let [ax, ay] = self.raw();
+        let [bx, by] = other.raw();
+        Self::from_raw_unchecked(
+            ((ax as i64 + bx as i64) / 2) as i32,
+            ((ay as i64 + by as i64) / 2) as i32,
+        )
+    }
+
+    /// Returns the squared raw Q16 distance. The result has 32 fractional
+    /// bits and fits in `u64` for the bounded world range.
+    #[inline(always)]
+    pub fn squared_distance(self, other: Self) -> u64 {
+        (self - other).squared_magnitude()
+    }
 }
 
 impl core::ops::Sub for Position {
@@ -127,11 +133,6 @@ impl core::ops::Sub for Position {
 #[inline(always)]
 const fn is_valid_raw(value: i32) -> bool {
     value >= Position::MIN_RAW && value <= Position::MAX_RAW
-}
-
-#[inline(always)]
-const fn is_valid_wide(value: i64) -> bool {
-    value >= Position::MIN_RAW as i64 && value <= Position::MAX_RAW as i64
 }
 
 #[inline(always)]
@@ -179,5 +180,20 @@ mod tests {
         );
         assert!(Position::checked_from_raw(Position::MIN_RAW, Position::MAX_RAW).is_some());
         assert!(Position::checked_from_raw(Position::MIN_RAW - 1, 0).is_none());
+    }
+
+    #[test]
+    fn midpoint_widens_and_stays_in_world() {
+        let min = Position::from_raw(Position::MIN_RAW, Position::MIN_RAW);
+        let max = Position::from_raw(Position::MAX_RAW, Position::MAX_RAW);
+
+        assert_eq!(min.midpoint(max), Position::ZERO);
+    }
+
+    #[test]
+    fn squared_distance_uses_bounded_difference() {
+        let a = Position::from_raw(3, 4);
+
+        assert_eq!(a.squared_distance(Position::ZERO), 25);
     }
 }

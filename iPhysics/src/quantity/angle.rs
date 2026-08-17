@@ -2,7 +2,11 @@ use super::angular_velocity::AngularVelocity;
 
 const ANGLE_SCALE: f64 = (1_u64 << 32) as f64;
 const TAU: f64 = core::f64::consts::TAU;
-const CORDIC_GAIN_Q30: i64 = 652_032_874;
+// The ideal inverse CORDIC gain rounded to Q30 is 652_032_874. Integer shifts
+// in the iterations can expand the resulting unit vector by a few Q30 units.
+// A 128-unit guard makes every non-cardinal rotation conservatively
+// non-expanding, which lets collider-radius invariants survive rotation.
+const CORDIC_GAIN_Q30: i64 = 652_032_746;
 const CORDIC_ANGLES: [i64; 31] = [
     536_870_912,
     316_933_406,
@@ -127,6 +131,7 @@ impl Angle {
             }
         }
 
+        debug_assert!(sin * sin + cos * cos <= 1_i64 << 60);
         [(sin * sign) as i32, (cos * sign) as i32]
     }
 
@@ -196,5 +201,14 @@ mod tests {
         assert_eq!(Angle::ZERO.sin_cos_q30(), [0, 1 << 30]);
         assert_eq!(Angle::QUARTER_TURN.sin_cos_q30(), [1 << 30, 0]);
         assert_eq!(Angle::HALF_TURN.sin_cos_q30(), [0, -(1 << 30)]);
+    }
+
+    #[test]
+    fn cordic_rotation_is_non_expanding() {
+        let scale_squared = 1_i64 << 60;
+        for raw in (0..=u32::MAX).step_by(65_537) {
+            let [sin, cos] = Angle::from_raw(raw).sin_cos_q30();
+            assert!(sin as i64 * sin as i64 + cos as i64 * cos as i64 <= scale_squared);
+        }
     }
 }

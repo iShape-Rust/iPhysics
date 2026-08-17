@@ -434,10 +434,12 @@ fn paint_collider(
         }
         Collider::Convex(convex) => {
             let points = convex
-                .vertices()
+                .transformed_vertices(transform)
                 .iter()
-                .map(|vertex| transform.apply(*vertex))
-                .map(|position| screen_position(camera, rect, position))
+                .map(|point| {
+                    let [x, y] = point.raw();
+                    screen_raw_position(camera, rect, x, y)
+                })
                 .collect::<Vec<_>>();
             if points.len() == convex.len() {
                 painter.add(egui::Shape::convex_polygon(points, fill, stroke));
@@ -452,14 +454,23 @@ fn paint_collider(
 }
 
 fn paint_aabb(painter: &egui::Painter, rect: Rect, camera: &Camera, aabb: Aabb) {
-    let screen_min = screen_position(camera, rect, aabb.min());
-    let screen_max = screen_position(camera, rect, aabb.max());
+    let min = aabb.min();
+    let max = aabb.max();
+    let [min_x, min_y] = min.raw();
+    let [max_x, max_y] = max.raw();
+    let screen_min = screen_raw_position(camera, rect, min_x, min_y);
+    let screen_max = screen_raw_position(camera, rect, max_x, max_y);
     painter.rect_stroke(
         Rect::from_two_pos(screen_min, screen_max),
         0.0,
         Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(106, 226, 125, 150)),
         StrokeKind::Inside,
     );
+}
+
+fn screen_raw_position(camera: &Camera, rect: Rect, x: i32, y: i32) -> Pos2 {
+    let scale = Position::SCALE as f32;
+    camera.screen_from_world(rect, Pos2::new(x as f32 / scale, y as f32 / scale))
 }
 
 fn paint_body_id(

@@ -29,10 +29,13 @@ impl Circle {
     pub fn aabb(self, center: Position) -> Aabb {
         let [x, y] = center.raw();
         let r = self.radius.raw() as i64;
-        Aabb::from_points(
-            Position::from_wide_narrow(x as i64 - r, y as i64 - r),
-            Position::from_wide_narrow(x as i64 + r, y as i64 + r),
-        )
+        let min_x = x as i64 - r;
+        let max_x = x as i64 + r;
+        let min_y = y as i64 - r;
+        let max_y = y as i64 + r;
+        debug_assert!(min_x >= i32::MIN as i64 && max_x <= i32::MAX as i64);
+        debug_assert!(min_y >= i32::MIN as i64 && max_y <= i32::MAX as i64);
+        Aabb::from_raw_unchecked(min_x as i32, max_x as i32, min_y as i32, max_y as i32)
     }
 }
 
@@ -44,5 +47,15 @@ mod tests {
     fn radius_respects_world_limit() {
         assert!(Circle::new(Length::from_raw(Position::MAX_RAW as u32)).is_some());
         assert!(Circle::new(Length::from_raw(Position::MAX_RAW as u32 + 1)).is_none());
+    }
+
+    #[test]
+    fn aabb_can_extend_beyond_position_range() {
+        let circle = Circle::new(Length::from_raw(Position::MAX_RAW as u32)).unwrap();
+        let center = Position::from_raw(Position::MAX_RAW, Position::MAX_RAW);
+        let aabb = circle.aabb(center);
+
+        assert_eq!(aabb.max().raw()[0], i32::MAX - 1);
+        assert!(aabb.max().raw()[0] > Position::MAX_RAW);
     }
 }

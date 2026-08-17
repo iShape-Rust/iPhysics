@@ -1,5 +1,5 @@
 use super::Contact;
-use super::sat::{BestAxis, centroid, midpoint, select_axis, support};
+use super::sat::{BestAxis, select_axis, support};
 use crate::body::BodyId;
 use crate::collider::Convex;
 use crate::quantity::Length;
@@ -15,8 +15,8 @@ pub(super) fn collide(
 ) -> Option<Contact> {
     let vertices_a = convex_a.transformed_vertices(transform_a);
     let vertices_b = convex_b.transformed_vertices(transform_b);
-    let center_a = centroid(&vertices_a);
-    let center_b = centroid(&vertices_b);
+    let center_a = convex_a.transformed_center(transform_a);
+    let center_b = convex_b.transformed_center(transform_b);
     let mut best: BestAxis = None;
 
     for index in 0..convex_a.len() {
@@ -46,7 +46,7 @@ pub(super) fn collide(
     Some(Contact {
         body_a,
         body_b,
-        point: midpoint(point_a, point_b),
+        point: point_a.midpoint(point_b),
         normal,
         penetration: Length::from_raw(penetration),
     })

@@ -7,7 +7,7 @@ use crate::transform::Transform;
 
 pub use circle::Circle;
 pub use composite::{ColliderPart, CompositeCollider, CompositeColliderError};
-pub use convex::{Convex, ConvexError};
+pub use convex::{Convex, ConvexError, TransformedVertices};
 
 /// Inline collision geometry owned by a body or a composite part.
 ///

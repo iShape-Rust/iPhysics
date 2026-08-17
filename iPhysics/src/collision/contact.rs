@@ -1,6 +1,6 @@
 use crate::body::BodyId;
-use crate::geometry::UnitVector;
-use crate::quantity::{Length, Position};
+use crate::geometry::{GeometryPoint, UnitVector};
+use crate::quantity::Length;
 
 /// Stateless geometric result generated for the current tick only.
 ///
@@ -14,7 +14,7 @@ use crate::quantity::{Length, Position};
 pub struct Contact {
     pub body_a: BodyId,
     pub body_b: BodyId,
-    pub point: Position,
+    pub point: GeometryPoint,
     pub normal: UnitVector,
     pub penetration: Length,
 }

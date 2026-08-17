@@ -34,6 +34,24 @@ impl UnitVector {
         ))
     }
 
+    /// Normalizes a full-i32 geometry-point difference. Components can require
+    /// 33 signed bits, so squared distance and scaling use i128 internally.
+    #[inline]
+    pub(crate) fn normalized_wide(vector: [i64; 2]) -> Option<Self> {
+        let x = vector[0] as i128;
+        let y = vector[1] as i128;
+        let length = (x * x + y * y).isqrt();
+        if length == 0 {
+            return None;
+        }
+
+        let scale = 1_i128 << Self::FRACTION_BITS;
+        Some(Self::from_raw(
+            (x * scale / length) as i32,
+            (y * scale / length) as i32,
+        ))
+    }
+
     /// Projects a bounded raw vector onto this direction, preserving the
     /// vector's fixed-point scale.
     #[inline(always)]
