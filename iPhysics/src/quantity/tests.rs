@@ -1,7 +1,7 @@
 use super::raw::shift_round;
 use super::{
     Angle, AngleDelta, AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity,
-    Position, checked_integrate, checked_integrate_angular,
+    Position, integrate, integrate_angular,
 };
 
 #[test]
@@ -17,8 +17,8 @@ fn expected_values_fit_the_formats() {
 
 #[test]
 fn q24_rejects_values_outside_its_range() {
-    assert!(LinearVelocity::from_meters_per_second(128.0, 0.0).is_none());
-    assert!(LinearAcceleration::from_meters_per_second_squared(-128.1, 0.0).is_none());
+    assert!(LinearVelocity::from_meters_per_second(100.1, 0.0).is_none());
+    assert!(LinearAcceleration::from_meters_per_second_squared(-100.1, 0.0).is_none());
     assert!(LinearVelocity::from_meters_per_second(f64::NAN, 0.0).is_none());
 }
 
@@ -27,7 +27,7 @@ fn integrates_constant_velocity_at_64_hz() {
     let position = Position::ZERO;
     let velocity = LinearVelocity::from_meters_per_second(1.0, -1.0).unwrap();
 
-    let position = position.checked_advance(velocity).unwrap();
+    let position = position.advance(velocity);
 
     assert_eq!(position.raw(), [1_024, -1_024]);
     assert_eq!(position.to_meters(), [0.015625, -0.015625]);
@@ -37,8 +37,7 @@ fn integrates_constant_velocity_at_64_hz() {
 fn integrates_acceleration_before_position() {
     let acceleration = LinearAcceleration::from_meters_per_second_squared(100.0, -100.0).unwrap();
 
-    let (position, velocity) =
-        checked_integrate(Position::ZERO, LinearVelocity::ZERO, acceleration).unwrap();
+    let (position, velocity) = integrate(Position::ZERO, LinearVelocity::ZERO, acceleration);
 
     assert_eq!(velocity.to_meters_per_second(), [1.5625, -1.5625]);
     assert_eq!(position.raw(), [1_600, -1_600]);
@@ -49,24 +48,18 @@ fn rounds_small_motion_symmetrically() {
     let positive = LinearVelocity::from_meters_per_second(0.001, 0.0).unwrap();
     let negative = LinearVelocity::from_meters_per_second(-0.001, 0.0).unwrap();
 
-    assert_eq!(
-        Position::ZERO.checked_advance(positive).unwrap().raw()[0],
-        1
-    );
-    assert_eq!(
-        Position::ZERO.checked_advance(negative).unwrap().raw()[0],
-        -1
-    );
+    assert_eq!(Position::ZERO.advance(positive).raw()[0], 1);
+    assert_eq!(Position::ZERO.advance(negative).raw()[0], -1);
     assert_eq!(shift_round(8, 4), 1);
     assert_eq!(shift_round(-8, 4), -1);
 }
 
 #[test]
-fn checked_integration_reports_overflow() {
+fn integration_saturates_at_world_boundary() {
     let position = Position::from_raw(i32::MAX, 0);
     let velocity = LinearVelocity::from_meters_per_second(1.0, 0.0).unwrap();
 
-    assert!(position.checked_advance(velocity).is_none());
+    assert_eq!(position.advance(velocity).raw()[0], Position::MAX_RAW);
 }
 
 #[test]
@@ -93,8 +86,7 @@ fn angle_radian_conversion_uses_canonical_turn_values() {
 fn integrates_angular_acceleration_before_angle() {
     let acceleration = AngularAcceleration::from_radians_per_second_squared(100.0).unwrap();
 
-    let (angle, velocity) =
-        checked_integrate_angular(Angle::ZERO, AngularVelocity::ZERO, acceleration).unwrap();
+    let (angle, velocity) = integrate_angular(Angle::ZERO, AngularVelocity::ZERO, acceleration);
 
     assert_eq!(velocity.to_radians_per_second(), 1.5625);
     let expected_radians = 1.5625 / 64.0;
@@ -111,6 +103,17 @@ fn angular_velocity_conversion_is_symmetric() {
         positive.angle_delta_per_tick().raw(),
         -negative.angle_delta_per_tick().raw()
     );
-    assert!(AngularVelocity::from_radians_per_second(128.0).is_none());
-    assert!(AngularAcceleration::from_radians_per_second_squared(-128.1).is_none());
+    assert!(AngularVelocity::from_radians_per_second(100.1).is_none());
+    assert!(AngularAcceleration::from_radians_per_second_squared(-100.1).is_none());
+}
+
+#[test]
+fn velocity_integration_saturates_at_gameplay_limit() {
+    let velocity = LinearVelocity::from_meters_per_second(100.0, -100.0).unwrap();
+    let acceleration = LinearAcceleration::from_meters_per_second_squared(100.0, -100.0).unwrap();
+
+    assert_eq!(
+        velocity.advance(acceleration).raw(),
+        [LinearVelocity::MAX_RAW, LinearVelocity::MIN_RAW]
+    );
 }

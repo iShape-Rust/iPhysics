@@ -7,7 +7,7 @@ use crate::quantity::{Length, Position};
 /// Computes a single deterministic circle-circle contact. The normal points
 /// from A to B. Coincident centers use +X as the canonical direction.
 #[inline]
-pub fn collide_circles(
+pub fn collide(
     body_a: BodyId,
     circle_a: Circle,
     center_a: Position,
@@ -28,20 +28,13 @@ pub fn collide_circles(
     let normal = UnitVector::normalized_with_length(delta, distance).unwrap_or(UnitVector::X);
 
     let penetration = radius_sum - distance;
-    debug_assert!(penetration <= i32::MAX as u64);
     let penetration_raw = penetration as u32;
     let contact_offset = circle_a.radius().raw() as i32 - (penetration_raw / 2) as i32;
     let [offset_x, offset_y] = normal.scaled_raw(contact_offset).raw();
-    let point_x = ax as i64 + offset_x as i64;
-    let point_y = ay as i64 + offset_y as i64;
-
     Some(Contact {
         body_a,
         body_b,
-        point: Position::checked_from_raw(
-            i32::try_from(point_x).ok()?,
-            i32::try_from(point_y).ok()?,
-        )?,
+        point: Position::from_wide_narrow(ax as i64 + offset_x as i64, ay as i64 + offset_y as i64),
         normal,
         penetration: Length::from_raw(penetration_raw),
     })
@@ -54,7 +47,7 @@ mod tests {
     #[test]
     fn tangent_circles_create_zero_penetration_contact() {
         let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
-        let contact = collide_circles(
+        let contact = collide(
             BodyId::new(1),
             circle,
             Position::ZERO,
@@ -73,7 +66,7 @@ mod tests {
     fn separated_circles_do_not_collide() {
         let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
         assert!(
-            collide_circles(
+            collide(
                 BodyId::new(1),
                 circle,
                 Position::ZERO,
@@ -89,7 +82,7 @@ mod tests {
     fn contained_circle_uses_signed_contact_offset() {
         let small = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
         let large = Circle::new(Length::from_meters(3.0).unwrap()).unwrap();
-        let contact = collide_circles(
+        let contact = collide(
             BodyId::new(1),
             small,
             Position::ZERO,

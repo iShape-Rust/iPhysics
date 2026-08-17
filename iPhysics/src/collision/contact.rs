@@ -18,3 +18,16 @@ pub struct Contact {
     pub normal: UnitVector,
     pub penetration: Length,
 }
+
+impl Contact {
+    /// Reverses the contact endpoints while preserving the same geometry.
+    #[inline(always)]
+    pub(crate) fn flipped(self) -> Self {
+        Self {
+            body_a: self.body_b,
+            body_b: self.body_a,
+            normal: -self.normal,
+            ..self
+        }
+    }
+}

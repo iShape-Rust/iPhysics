@@ -1,6 +1,6 @@
 use crate::quantity::{
-    AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity, checked_integrate,
-    checked_integrate_angular,
+    AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity, integrate,
+    integrate_angular,
 };
 use crate::transform::Transform;
 
@@ -134,34 +134,29 @@ impl BodyState {
     /// Integrates one fixed tick. Sleeping bodies deliberately ignore gravity;
     /// external changes must call [`Self::wake`] first.
     #[inline]
-    pub fn checked_integrate(
+    pub fn integrate(
         &mut self,
         linear_acceleration: LinearAcceleration,
         angular_acceleration: AngularAcceleration,
-    ) -> bool {
+    ) {
         if self.sleeping {
-            return true;
+            return;
         }
 
-        let Some((position, linear_velocity)) = checked_integrate(
+        let (position, linear_velocity) = integrate(
             self.transform.position,
             self.linear_velocity,
             linear_acceleration,
-        ) else {
-            return false;
-        };
-        let Some((angle, angular_velocity)) = checked_integrate_angular(
+        );
+        let (angle, angular_velocity) = integrate_angular(
             self.transform.angle,
             self.angular_velocity,
             angular_acceleration,
-        ) else {
-            return false;
-        };
+        );
 
         self.transform = Transform::new(position, angle);
         self.linear_velocity = linear_velocity;
         self.angular_velocity = angular_velocity;
-        true
     }
 
     /// Updates the explicit rollback-safe sleep counter after collision solving.
@@ -200,7 +195,7 @@ mod tests {
     use crate::quantity::{Angle, Position};
 
     #[test]
-    fn integrates_awake_body_transactionally() {
+    fn integrates_awake_body() {
         let mut state = BodyState::new(
             Transform::new(Position::ZERO, Angle::ZERO),
             LinearVelocity::ZERO,
@@ -208,7 +203,7 @@ mod tests {
         );
         let acceleration = LinearAcceleration::from_meters_per_second_squared(64.0, 0.0).unwrap();
 
-        assert!(state.checked_integrate(acceleration, AngularAcceleration::ZERO));
+        state.integrate(acceleration, AngularAcceleration::ZERO);
         assert_eq!(state.linear_velocity().to_meters_per_second(), [1.0, 0.0]);
         assert_eq!(state.transform().position.to_meters(), [0.015625, 0.0]);
     }
@@ -258,10 +253,10 @@ mod tests {
         assert!(state.update_sleep(true, config));
         let before = state;
 
-        assert!(state.checked_integrate(
+        state.integrate(
             LinearAcceleration::from_meters_per_second_squared(0.0, -10.0).unwrap(),
             AngularAcceleration::ZERO,
-        ));
+        );
         assert_eq!(state, before);
     }
 }

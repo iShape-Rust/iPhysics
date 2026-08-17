@@ -22,7 +22,7 @@ pub enum Collider {
 
 impl Collider {
     #[inline]
-    pub fn aabb(self, transform: Transform) -> Option<Aabb> {
+    pub fn aabb(self, transform: Transform) -> Aabb {
         match self {
             Self::Circle(circle) => circle.aabb(transform.position),
             Self::Convex(convex) => convex.aabb(transform),

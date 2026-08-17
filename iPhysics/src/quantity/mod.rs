@@ -13,12 +13,12 @@ mod linear_acceleration;
 mod linear_velocity;
 mod mass;
 mod position;
-mod raw;
+pub(crate) mod raw;
 
 pub use angle::{Angle, AngleDelta};
 pub use angular_acceleration::AngularAcceleration;
 pub use angular_velocity::AngularVelocity;
-pub use integration::{checked_integrate, checked_integrate_angular};
+pub use integration::{integrate, integrate_angular};
 pub use length::Length;
 pub use linear_acceleration::LinearAcceleration;
 pub use linear_velocity::LinearVelocity;

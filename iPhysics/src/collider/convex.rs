@@ -101,7 +101,7 @@ impl Convex {
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
-            normals[i] = UnitVector::normalized(DiffVec2::from_raw(edge_y, -edge_x))
+            normals[i] = UnitVector::normalized(DiffVec2::from_raw_unchecked(edge_y, -edge_x))
                 .ok_or(ConvexError::CollinearEdge)?;
         }
 
@@ -132,34 +132,33 @@ impl Convex {
         &self.normals[..self.count as usize]
     }
 
-    pub fn aabb(self, transform: Transform) -> Option<Aabb> {
-        let vertices = self.transformed_vertices(transform)?;
+    pub fn aabb(self, transform: Transform) -> Aabb {
+        let vertices = self.transformed_vertices(transform);
         let mut min = vertices[0];
         let mut max = vertices[0];
         for point in &vertices[1..] {
             let [x, y] = point.raw();
             let [min_x, min_y] = min.raw();
             let [max_x, max_y] = max.raw();
-            min = Position::from_raw(min_x.min(x), min_y.min(y));
-            max = Position::from_raw(max_x.max(x), max_y.max(y));
+            min = Position::from_raw_unchecked(min_x.min(x), min_y.min(y));
+            max = Position::from_raw_unchecked(max_x.max(x), max_y.max(y));
         }
-        Aabb::from_min_max(min, max)
+        Aabb::from_points(min, max)
     }
 
-    pub(crate) fn transformed_vertices(self, transform: Transform) -> Option<TransformedVertices> {
+    pub(crate) fn transformed_vertices(self, transform: Transform) -> TransformedVertices {
         let mut result = TransformedVertices {
             vertices: [Position::ZERO; MAX_CONVEX_VERTICES],
             count: self.count,
         };
         for (index, vertex) in self.vertices().iter().copied().enumerate() {
-            result.vertices[index] = transform.checked_apply(vertex)?;
+            result.vertices[index] = transform.apply(vertex);
         }
-        Some(result)
+        result
     }
 
     pub(crate) fn transformed_normal(self, index: usize, transform: Transform) -> UnitVector {
-        let raw = rotate_fixed(self.normals[index].raw(), transform.angle)
-            .expect("rotating a Q30 unit vector cannot overflow i32");
+        let raw = rotate_fixed(self.normals[index].raw(), transform.angle);
         UnitVector::from_raw(raw[0], raw[1])
     }
 }
@@ -265,9 +264,7 @@ mod tests {
             Position::from_raw(-20, 10),
         ])
         .unwrap();
-        let aabb = convex
-            .aabb(Transform::new(Position::ZERO, Angle::QUARTER_TURN))
-            .unwrap();
+        let aabb = convex.aabb(Transform::new(Position::ZERO, Angle::QUARTER_TURN));
 
         assert_eq!(aabb.min(), Position::from_raw(-10, -20));
         assert_eq!(aabb.max(), Position::from_raw(10, 20));

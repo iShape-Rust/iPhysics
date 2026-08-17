@@ -1,5 +1,5 @@
 use super::{ContactBodyIndex, ContactPair, World};
-use crate::body::{Body, BodyId};
+use crate::body::Body;
 use crate::collision::{Contact, collide};
 use crate::quantity::{LinearVelocity, Position};
 use alloc::vec;
@@ -8,13 +8,6 @@ const WAKE_SPEED_RAW: i64 = 3_355_443; // 0.2 m/s in Q24
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 const POSITION_SLOP_RAW: u32 = 64; // 1/1024 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepError {
-    BoundaryOverflow(BodyId),
-    VelocityOverflow(BodyId),
-    PositionOverflow(BodyId),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StepStats {
@@ -25,17 +18,17 @@ pub struct StepStats {
 }
 
 impl World {
-    pub fn step(&mut self) -> Result<StepStats, StepError> {
-        self.integrate_velocities()?;
+    pub fn step(&mut self) -> StepStats {
+        self.integrate_velocities();
 
-        let mut stats = self.build_contacts()?;
+        let mut stats = self.build_contacts();
         self.wake_impacted_bodies();
 
         for _ in 0..self.settings.velocity_iterations.max(1) {
-            self.solve_velocities()?;
+            self.solve_velocities();
         }
-        self.correct_positions()?;
-        self.integrate_transforms()?;
+        self.correct_positions();
+        self.integrate_transforms();
 
         let mut has_contact = vec![false; self.bodies.len()];
         for pair in self.contact_pairs.iter().copied() {
@@ -53,10 +46,10 @@ impl World {
             }
         }
 
-        Ok(stats)
+        stats
     }
 
-    fn integrate_velocities(&mut self) -> Result<(), StepError> {
+    fn integrate_velocities(&mut self) {
         for body in &mut self.bodies {
             if body.state().is_sleeping() {
                 continue;
@@ -65,23 +58,18 @@ impl World {
             body.state_mut().linear_velocity = body
                 .state()
                 .linear_velocity()
-                .checked_advance(self.settings.gravity)
-                .ok_or(StepError::VelocityOverflow(body.id()))?;
+                .advance(self.settings.gravity);
         }
-        Ok(())
     }
 
-    fn build_contacts(&mut self) -> Result<StepStats, StepError> {
+    fn build_contacts(&mut self) -> StepStats {
         self.contacts.clear();
         self.contact_pairs.clear();
         let mut stats = StepStats::default();
 
         for index_a in 0..self.bodies.len() {
             let a = &self.bodies[index_a];
-            let aabb_a = a
-                .collider()
-                .aabb(a.state().transform())
-                .ok_or(StepError::BoundaryOverflow(a.id()))?;
+            let aabb_a = a.collider().aabb(a.state().transform());
 
             for index_b in index_a + 1..self.bodies.len() {
                 let b = &self.bodies[index_b];
@@ -90,10 +78,7 @@ impl World {
                 }
 
                 stats.tested_pairs += 1;
-                let aabb_b = b
-                    .collider()
-                    .aabb(b.state().transform())
-                    .ok_or(StepError::BoundaryOverflow(b.id()))?;
+                let aabb_b = b.collider().aabb(b.state().transform());
                 if !aabb_a.intersects(aabb_b) {
                     continue;
                 }
@@ -126,14 +111,8 @@ impl World {
 
                 for part in static_body.collider().parts() {
                     stats.tested_pairs += 1;
-                    let part_transform = static_body
-                        .transform()
-                        .checked_compose(part.local_transform())
-                        .ok_or(StepError::BoundaryOverflow(static_body.id()))?;
-                    let part_aabb = part
-                        .collider()
-                        .aabb(part_transform)
-                        .ok_or(StepError::BoundaryOverflow(static_body.id()))?;
+                    let part_transform = static_body.transform().compose(part.local_transform());
+                    let part_aabb = part.collider().aabb(part_transform);
                     if !aabb_a.intersects(part_aabb) {
                         continue;
                     }
@@ -158,7 +137,7 @@ impl World {
         }
 
         stats.contacts = self.contacts.len();
-        Ok(stats)
+        stats
     }
 
     fn wake_impacted_bodies(&mut self) {
@@ -192,7 +171,7 @@ impl World {
         }
     }
 
-    fn solve_velocities(&mut self) -> Result<(), StepError> {
+    fn solve_velocities(&mut self) {
         for (contact, pair) in self.contacts.iter().zip(self.contact_pairs.iter().copied()) {
             if let ContactBodyIndex::Static(static_index) = pair.b {
                 let a = &mut self.bodies[pair.a];
@@ -212,7 +191,7 @@ impl World {
                 let velocity_change =
                     round_shift(-(normal_speed as i128) * ((1_i128 << 16) + restitution), 16);
                 let [change_x, change_y] = contact.normal.scaled_wide_raw(velocity_change);
-                add_velocity(a, -change_x, -change_y)?;
+                add_velocity(a, -change_x, -change_y);
                 continue;
             }
 
@@ -243,17 +222,16 @@ impl World {
 
             if inverse_a != 0 {
                 let [change_x, change_y] = contact.normal.scaled_wide_raw(change_a);
-                add_velocity(a, -change_x, -change_y)?;
+                add_velocity(a, -change_x, -change_y);
             }
             if inverse_b != 0 {
                 let [change_x, change_y] = contact.normal.scaled_wide_raw(change_b);
-                add_velocity(b, change_x, change_y)?;
+                add_velocity(b, change_x, change_y);
             }
         }
-        Ok(())
     }
 
-    fn correct_positions(&mut self) -> Result<(), StepError> {
+    fn correct_positions(&mut self) {
         for (contact, pair) in self.contacts.iter().zip(self.contact_pairs.iter().copied()) {
             let correction = contact
                 .penetration
@@ -268,7 +246,7 @@ impl World {
 
             if let ContactBodyIndex::Static(_) = pair.b {
                 let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as i128);
-                add_position(&mut self.bodies[pair.a], -move_x, -move_y)?;
+                add_position(&mut self.bodies[pair.a], -move_x, -move_y);
                 continue;
             }
 
@@ -287,33 +265,27 @@ impl World {
             let move_b = div_round(correction as i128 * inverse_b as i128, inverse_sum as i128);
             if inverse_a != 0 {
                 let [move_x, move_y] = contact.normal.scaled_wide_raw(move_a);
-                add_position(a, -move_x, -move_y)?;
+                add_position(a, -move_x, -move_y);
             }
             if inverse_b != 0 {
                 let [move_x, move_y] = contact.normal.scaled_wide_raw(move_b);
-                add_position(b, move_x, move_y)?;
+                add_position(b, move_x, move_y);
             }
         }
-        Ok(())
     }
 
-    fn integrate_transforms(&mut self) -> Result<(), StepError> {
+    fn integrate_transforms(&mut self) {
         for body in &mut self.bodies {
             if body.state().is_sleeping() {
                 continue;
             }
 
-            let next = body
-                .state()
-                .transform()
-                .checked_advance(
-                    body.state().linear_velocity(),
-                    body.state().angular_velocity(),
-                )
-                .ok_or(StepError::PositionOverflow(body.id()))?;
+            let next = body.state().transform().advance(
+                body.state().linear_velocity(),
+                body.state().angular_velocity(),
+            );
             body.state_mut().transform = next;
         }
-        Ok(())
     }
 }
 
@@ -327,21 +299,16 @@ fn relative_normal_speed(a: &Body, b: Option<&Body>, contact: &Contact) -> i64 {
         .dot_wide_raw([bvx as i64 - avx as i64, bvy as i64 - avy as i64])
 }
 
-fn add_velocity(body: &mut Body, dx: i128, dy: i128) -> Result<(), StepError> {
+fn add_velocity(body: &mut Body, dx: i128, dy: i128) {
     let [x, y] = body.state().linear_velocity().raw();
-    let x = i32::try_from(x as i128 + dx).map_err(|_| StepError::VelocityOverflow(body.id()))?;
-    let y = i32::try_from(y as i128 + dy).map_err(|_| StepError::VelocityOverflow(body.id()))?;
-    body.state_mut().linear_velocity = LinearVelocity::from_raw(x, y);
-    Ok(())
+    body.state_mut().linear_velocity =
+        LinearVelocity::from_wide_saturated(x as i128 + dx, y as i128 + dy);
 }
 
-fn add_position(body: &mut Body, dx: i128, dy: i128) -> Result<(), StepError> {
+fn add_position(body: &mut Body, dx: i128, dy: i128) {
     let [x, y] = body.state().transform().position.raw();
-    let x = i32::try_from(x as i128 + dx).map_err(|_| StepError::PositionOverflow(body.id()))?;
-    let y = i32::try_from(y as i128 + dy).map_err(|_| StepError::PositionOverflow(body.id()))?;
     body.state_mut().transform.position =
-        Position::checked_from_raw(x, y).ok_or(StepError::PositionOverflow(body.id()))?;
-    Ok(())
+        Position::from_wide_saturated(x as i128 + dx, y as i128 + dy);
 }
 
 fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut Body) {
@@ -369,7 +336,7 @@ fn div_round(numerator: i128, denominator: i128) -> i128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::body::{BodyState, Material, SleepConfig, StaticBody};
+    use crate::body::{BodyId, BodyState, Material, SleepConfig, StaticBody};
     use crate::collider::{Circle, ColliderPart, CompositeCollider};
     use crate::quantity::{Angle, AngularVelocity, Length, LinearAcceleration, Mass};
     use crate::transform::Transform;
@@ -403,7 +370,7 @@ mod tests {
             .add_body(circle_body(2, 0.5, -1.0, Material::ELASTIC))
             .unwrap();
 
-        let stats = world.step().unwrap();
+        let stats = world.step();
 
         assert_eq!(stats.contacts, 1);
         assert_eq!(
@@ -436,13 +403,13 @@ mod tests {
             .add_body(circle_body(2, 0.5, -1.0, Material::INELASTIC))
             .unwrap();
 
-        first.step().unwrap();
+        first.step();
         let mut replay = first.clone();
         first.contacts.clear();
 
         for _ in 0..32 {
-            first.step().unwrap();
-            replay.step().unwrap();
+            first.step();
+            replay.step();
         }
 
         assert_eq!(first.bodies(), replay.bodies());
@@ -455,24 +422,21 @@ mod tests {
             .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
             .unwrap();
         world
-            .add_static_body(
-                StaticBody::new(
-                    BodyId::new(2),
-                    Transform::new(Position::from_meters(1.0, 0.0).unwrap(), Angle::ZERO),
-                    CompositeCollider::single(
-                        Circle::new(Length::from_meters(0.5).unwrap())
-                            .unwrap()
-                            .into(),
-                    )
-                    .unwrap(),
-                    Material::INELASTIC,
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::new(Position::from_meters(1.0, 0.0).unwrap(), Angle::ZERO),
+                CompositeCollider::single(
+                    Circle::new(Length::from_meters(0.5).unwrap())
+                        .unwrap()
+                        .into(),
                 )
                 .unwrap(),
-            )
+                Material::INELASTIC,
+            ))
             .unwrap();
 
         for _ in 0..SleepConfig::FAST_EFFECTS.required_ticks() {
-            world.step().unwrap();
+            world.step();
         }
 
         assert!(world.body(BodyId::new(1)).unwrap().state().is_sleeping());
@@ -497,18 +461,15 @@ mod tests {
         ])
         .unwrap();
         world
-            .add_static_body(
-                StaticBody::new(
-                    BodyId::new(2),
-                    Transform::IDENTITY,
-                    composite,
-                    Material::INELASTIC,
-                )
-                .unwrap(),
-            )
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::IDENTITY,
+                composite,
+                Material::INELASTIC,
+            ))
             .unwrap();
 
-        let stats = world.step().unwrap();
+        let stats = world.step();
 
         assert_eq!(stats.contacts, 1);
         assert_eq!(world.contacts()[0].body_a, BodyId::new(1));

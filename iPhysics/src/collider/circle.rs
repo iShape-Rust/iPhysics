@@ -26,17 +26,12 @@ impl Circle {
     }
 
     #[inline]
-    pub fn aabb(self, center: Position) -> Option<Aabb> {
+    pub fn aabb(self, center: Position) -> Aabb {
         let [x, y] = center.raw();
         let r = self.radius.raw() as i64;
-        let min_x = i32::try_from(x as i64 - r).ok()?;
-        let max_x = i32::try_from(x as i64 + r).ok()?;
-        let min_y = i32::try_from(y as i64 - r).ok()?;
-        let max_y = i32::try_from(y as i64 + r).ok()?;
-
-        Aabb::from_min_max(
-            Position::checked_from_raw(min_x, min_y)?,
-            Position::checked_from_raw(max_x, max_y)?,
+        Aabb::from_points(
+            Position::from_wide_narrow(x as i64 - r, y as i64 - r),
+            Position::from_wide_narrow(x as i64 + r, y as i64 + r),
         )
     }
 }

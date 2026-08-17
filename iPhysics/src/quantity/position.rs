@@ -23,6 +23,38 @@ impl Position {
         Self(RawVec2::new(clamp_raw(x), clamp_raw(y)))
     }
 
+    /// Creates a position when the caller has already proved the world-range
+    /// invariant. No validation or saturation is performed.
+    #[inline(always)]
+    pub(crate) const fn from_raw_unchecked(x: i32, y: i32) -> Self {
+        Self(RawVec2::new(x, y))
+    }
+
+    /// Creates a position from a wide simulation result, saturating at the
+    /// representable world boundary instead of wrapping or failing the tick.
+    #[inline(always)]
+    pub(crate) const fn from_wide_saturated(x: i128, y: i128) -> Self {
+        Self(RawVec2::from_wide_saturated(
+            x,
+            y,
+            Self::MIN_RAW,
+            Self::MAX_RAW,
+        ))
+    }
+
+    /// Creates a position from geometry whose range must fit the world by
+    /// construction. Release builds still saturate defensively.
+    #[inline(always)]
+    pub(crate) const fn from_wide_narrow(x: i64, y: i64) -> Self {
+        debug_assert!(is_valid_wide(x) && is_valid_wide(y));
+        Self(RawVec2::from_i64_saturated(
+            x,
+            y,
+            Self::MIN_RAW,
+            Self::MAX_RAW,
+        ))
+    }
+
     #[inline(always)]
     pub const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
         if is_valid_raw(x) && is_valid_raw(y) {
@@ -68,12 +100,13 @@ impl Position {
 
     /// Advances the position by one 64 Hz tick using semi-implicit velocity.
     #[inline]
-    pub fn checked_advance(self, velocity: LinearVelocity) -> Option<Self> {
-        let raw = self
-            .0
-            .checked_add_shifted(velocity.raw_vec(), VELOCITY_TO_POSITION_SHIFT)?;
-        let [x, y] = raw.raw();
-        Self::checked_from_raw(x, y)
+    pub const fn advance(self, velocity: LinearVelocity) -> Self {
+        Self(self.0.add_shifted_saturated(
+            velocity.raw_vec(),
+            VELOCITY_TO_POSITION_SHIFT,
+            Self::MIN_RAW,
+            Self::MAX_RAW,
+        ))
     }
 }
 
@@ -87,15 +120,18 @@ impl core::ops::Sub for Position {
         let [rhs_x, rhs_y] = rhs.raw();
         let dx = x as i64 - rhs_x as i64;
         let dy = y as i64 - rhs_y as i64;
-        debug_assert!((-(i32::MAX as i64)..=i32::MAX as i64).contains(&dx));
-        debug_assert!((-(i32::MAX as i64)..=i32::MAX as i64).contains(&dy));
-        DiffVec2::from_raw(dx as i32, dy as i32)
+        DiffVec2::from_raw_unchecked(dx as i32, dy as i32)
     }
 }
 
 #[inline(always)]
 const fn is_valid_raw(value: i32) -> bool {
     value >= Position::MIN_RAW && value <= Position::MAX_RAW
+}
+
+#[inline(always)]
+const fn is_valid_wide(value: i64) -> bool {
+    value >= Position::MIN_RAW as i64 && value <= Position::MAX_RAW as i64
 }
 
 #[inline(always)]

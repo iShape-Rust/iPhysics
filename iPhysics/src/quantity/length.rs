@@ -4,7 +4,7 @@ use super::raw::quantize_u32_f64;
 /// Non-negative length in metres, stored as unsigned Q16.
 ///
 /// - Resolution: `2^-16 m`, approximately `0.000_015_259 m`.
-/// - Storage range: `0 m..65_536 m` (exclusive upper bound).
+/// - Storage range: `0 m...65_536 m` (exclusive upper bound).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Length(u32);
 

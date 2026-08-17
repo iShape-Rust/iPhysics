@@ -3,11 +3,6 @@ use crate::collider::CompositeCollider;
 use crate::geometry::Aabb;
 use crate::transform::Transform;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StaticBodyError {
-    BoundaryOverflow,
-}
-
 /// Immutable collision geometry that carries no dynamic simulation state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticBody {
@@ -25,17 +20,15 @@ impl StaticBody {
         transform: Transform,
         collider: CompositeCollider,
         material: Material,
-    ) -> Result<Self, StaticBodyError> {
-        let aabb = collider
-            .aabb(transform)
-            .ok_or(StaticBodyError::BoundaryOverflow)?;
-        Ok(Self {
+    ) -> Self {
+        let aabb = collider.aabb(transform);
+        Self {
             id,
             transform,
             collider,
             material,
             aabb,
-        })
+        }
     }
 
     #[inline(always)]

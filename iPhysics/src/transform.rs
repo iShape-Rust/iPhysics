@@ -28,114 +28,38 @@ impl Transform {
     /// on every target and does not depend on a platform floating-point
     /// implementation.
     #[inline]
-    pub fn checked_apply(self, local: Position) -> Option<Position> {
-        let [rx, ry] = rotate_fixed(local.raw(), self.angle)?;
+    pub fn apply(self, local: Position) -> Position {
+        let [rx, ry] = rotate_fixed(local.raw(), self.angle);
         let [tx, ty] = self.position.raw();
-        Position::checked_from_raw(
-            i32::try_from(tx as i64 + rx as i64).ok()?,
-            i32::try_from(ty as i64 + ry as i64).ok()?,
-        )
+        Position::from_wide_narrow(tx as i64 + rx as i64, ty as i64 + ry as i64)
     }
 
     /// Composes a child-local transform with this parent transform.
     #[inline]
-    pub fn checked_compose(self, local: Self) -> Option<Self> {
-        Some(Self {
-            position: self.checked_apply(local.position)?,
+    pub fn compose(self, local: Self) -> Self {
+        Self {
+            position: self.apply(local.position),
             angle: Angle::from_raw(self.angle.raw().wrapping_add(local.angle.raw())),
-        })
+        }
     }
 
     /// Advances the transform by one fixed 64 Hz tick.
     #[inline]
-    pub fn checked_advance(
+    pub fn advance(
         self,
         linear_velocity: LinearVelocity,
         angular_velocity: AngularVelocity,
-    ) -> Option<Self> {
-        Some(Self {
-            position: self.position.checked_advance(linear_velocity)?,
+    ) -> Self {
+        Self {
+            position: self.position.advance(linear_velocity),
             angle: self.angle.advance(angular_velocity),
-        })
-    }
-}
-
-const CORDIC_GAIN_Q30: i64 = 652_032_874;
-const CORDIC_ANGLES: [i64; 31] = [
-    536_870_912,
-    316_933_406,
-    167_458_907,
-    85_004_756,
-    42_667_331,
-    21_354_465,
-    10_679_838,
-    5_340_245,
-    2_670_163,
-    1_335_087,
-    667_544,
-    333_772,
-    166_886,
-    83_443,
-    41_722,
-    20_861,
-    10_430,
-    5_215,
-    2_608,
-    1_304,
-    652,
-    326,
-    163,
-    81,
-    41,
-    20,
-    10,
-    5,
-    3,
-    1,
-    1,
-];
-
-/// Returns cosine and sine as signed Q30 values.
-pub(crate) fn sin_cos_q30(angle: Angle) -> [i32; 2] {
-    match angle.raw() {
-        0 => return [1 << 30, 0],
-        0x4000_0000 => return [0, 1 << 30],
-        0x8000_0000 => return [-(1 << 30), 0],
-        0xc000_0000 => return [0, -(1 << 30)],
-        _ => {}
-    }
-
-    let mut z = angle.raw() as i32 as i64;
-    let mut sign = 1_i64;
-    if z > 1_i64 << 30 {
-        z -= 1_i64 << 31;
-        sign = -1;
-    } else if z < -(1_i64 << 30) {
-        z += 1_i64 << 31;
-        sign = -1;
-    }
-
-    let mut x = CORDIC_GAIN_Q30;
-    let mut y = 0_i64;
-    for (shift, angle) in CORDIC_ANGLES.into_iter().enumerate() {
-        let old_x = x;
-        if z >= 0 {
-            x -= y >> shift;
-            y += old_x >> shift;
-            z -= angle;
-        } else {
-            x += y >> shift;
-            y -= old_x >> shift;
-            z += angle;
         }
     }
-
-    [(x * sign) as i32, (y * sign) as i32]
 }
 
 #[inline]
-pub(crate) fn rotate_fixed(point: [i32; 2], angle: Angle) -> Option<[i32; 2]> {
-    let [cos, sin] = sin_cos_q30(angle);
+pub(crate) fn rotate_fixed(point: [i32; 2], angle: Angle) -> [i32; 2] {
+    let [sin, cos] = angle.sin_cos_q30();
     let x = round_shift(
         point[0] as i64 * cos as i64 - point[1] as i64 * sin as i64,
         30,
@@ -144,7 +68,7 @@ pub(crate) fn rotate_fixed(point: [i32; 2], angle: Angle) -> Option<[i32; 2]> {
         point[0] as i64 * sin as i64 + point[1] as i64 * cos as i64,
         30,
     );
-    Some([i32::try_from(x).ok()?, i32::try_from(y).ok()?])
+    [x as i32, y as i32]
 }
 
 #[inline(always)]
@@ -166,7 +90,7 @@ mod tests {
         let transform = Transform::IDENTITY;
         let linear = LinearVelocity::from_meters_per_second(64.0, -32.0).unwrap();
         let angular = AngularVelocity::from_radians_per_second(core::f64::consts::PI).unwrap();
-        let next = transform.checked_advance(linear, angular).unwrap();
+        let next = transform.advance(linear, angular);
 
         assert_eq!(next.position.to_meters(), [1.0, -0.5]);
         assert_ne!(next.angle, Angle::ZERO);
@@ -177,8 +101,8 @@ mod tests {
         let transform = Transform::new(Position::from_raw(100, 200), Angle::QUARTER_TURN);
 
         assert_eq!(
-            transform.checked_apply(Position::from_raw(30, 10)),
-            Some(Position::from_raw(90, 230))
+            transform.apply(Position::from_raw(30, 10)),
+            Position::from_raw(90, 230)
         );
     }
 }

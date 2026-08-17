@@ -2,26 +2,28 @@ use super::{
     Angle, AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity, Position,
 };
 
-/// Advances velocity and then position by one fixed 64 Hz simulation tick.
+/// Advances velocity and then position by one fixed 64 Hz simulation tick,
+/// saturating both quantities at their gameplay limits.
 #[inline]
-pub fn checked_integrate(
+pub fn integrate(
     position: Position,
     velocity: LinearVelocity,
     acceleration: LinearAcceleration,
-) -> Option<(Position, LinearVelocity)> {
-    let velocity = velocity.checked_advance(acceleration)?;
-    let position = position.checked_advance(velocity)?;
-    Some((position, velocity))
+) -> (Position, LinearVelocity) {
+    let velocity = velocity.advance(acceleration);
+    let position = position.advance(velocity);
+    (position, velocity)
 }
 
-/// Advances angular velocity and then angle by one fixed 64 Hz simulation tick.
+/// Advances angular velocity and then angle by one fixed 64 Hz simulation tick,
+/// saturating angular velocity at its gameplay limit.
 #[inline]
-pub fn checked_integrate_angular(
+pub fn integrate_angular(
     angle: Angle,
     velocity: AngularVelocity,
     acceleration: AngularAcceleration,
-) -> Option<(Angle, AngularVelocity)> {
-    let velocity = velocity.checked_advance(acceleration)?;
+) -> (Angle, AngularVelocity) {
+    let velocity = velocity.advance(acceleration);
     let angle = angle.advance(velocity);
-    Some((angle, velocity))
+    (angle, velocity)
 }

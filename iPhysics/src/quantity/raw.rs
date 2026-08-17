@@ -12,6 +12,26 @@ impl RawVec2 {
         Self { x, y }
     }
 
+    /// Saturates a wide pair to a quantity-specific inclusive raw range.
+    #[inline(always)]
+    pub(super) const fn from_wide_saturated(x: i128, y: i128, min: i32, max: i32) -> Self {
+        debug_assert!(min <= max);
+        Self {
+            x: clamp_i128_to_i32(x, min, max),
+            y: clamp_i128_to_i32(y, min, max),
+        }
+    }
+
+    /// Saturates an i64 pair without widening the common integration path.
+    #[inline(always)]
+    pub(super) const fn from_i64_saturated(x: i64, y: i64, min: i32, max: i32) -> Self {
+        debug_assert!(min <= max);
+        Self {
+            x: clamp_i64_to_i32(x, min, max),
+            y: clamp_i64_to_i32(y, min, max),
+        }
+    }
+
     #[inline(always)]
     pub(super) const fn raw(self) -> [i32; 2] {
         [self.x, self.y]
@@ -32,14 +52,16 @@ impl RawVec2 {
     }
 
     #[inline]
-    pub(super) fn checked_add_shifted(self, rhs: Self, shift: u32) -> Option<Self> {
+    pub(super) const fn add_shifted_saturated(
+        self,
+        rhs: Self,
+        shift: u32,
+        min: i32,
+        max: i32,
+    ) -> Self {
         let x = self.x as i64 + shift_round(rhs.x as i64, shift);
         let y = self.y as i64 + shift_round(rhs.y as i64, shift);
-
-        Some(Self {
-            x: i32::try_from(x).ok()?,
-            y: i32::try_from(y).ok()?,
-        })
+        Self::from_i64_saturated(x, y, min, max)
     }
 }
 
@@ -64,6 +86,13 @@ impl DiffVec2 {
     #[inline(always)]
     pub const fn from_raw(x: i32, y: i32) -> Self {
         Self::from_wide_clamped(x as i64, y as i64)
+    }
+
+    /// Creates a difference whose bounded range has already been proved by
+    /// the calling operation. No validation or saturation is performed.
+    #[inline(always)]
+    pub(crate) const fn from_raw_unchecked(x: i32, y: i32) -> Self {
+        Self { x, y }
     }
 
     #[inline(always)]
@@ -101,6 +130,28 @@ const fn clamp_diff_component(value: i64) -> i32 {
         -i32::MAX
     } else if value > i32::MAX as i64 {
         i32::MAX
+    } else {
+        value as i32
+    }
+}
+
+#[inline(always)]
+pub(super) const fn clamp_i64_to_i32(value: i64, min: i32, max: i32) -> i32 {
+    if value < min as i64 {
+        min
+    } else if value > max as i64 {
+        max
+    } else {
+        value as i32
+    }
+}
+
+#[inline(always)]
+pub(super) const fn clamp_i128_to_i32(value: i128, min: i32, max: i32) -> i32 {
+    if value < min as i128 {
+        min
+    } else if value > max as i128 {
+        max
     } else {
         value as i32
     }
@@ -158,7 +209,7 @@ pub(super) fn quantize_u32_f64(value: f64, fraction_bits: u32) -> Option<u32> {
 
 /// Rounds to the nearest integer; midpoint values are rounded away from zero.
 #[inline(always)]
-pub(super) fn shift_round(value: i64, shift: u32) -> i64 {
+pub(super) const fn shift_round(value: i64, shift: u32) -> i64 {
     debug_assert!(shift > 0);
     let half = 1_i64 << (shift - 1);
     if value < 0 {

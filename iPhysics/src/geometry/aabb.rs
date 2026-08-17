@@ -37,12 +37,12 @@ impl Aabb {
 
     #[inline(always)]
     pub const fn min(self) -> Position {
-        Position::from_raw(self.0.min_x, self.0.min_y)
+        Position::from_raw_unchecked(self.0.min_x, self.0.min_y)
     }
 
     #[inline(always)]
     pub const fn max(self) -> Position {
-        Position::from_raw(self.0.max_x, self.0.max_y)
+        Position::from_raw_unchecked(self.0.max_x, self.0.max_y)
     }
 
     /// Tests overlap including shared borders.

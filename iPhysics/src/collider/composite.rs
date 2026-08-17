@@ -33,7 +33,6 @@ impl ColliderPart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompositeColliderError {
     Empty,
-    BoundaryOverflow,
 }
 
 /// Arbitrary number of collider parts owned by one static body.
@@ -47,15 +46,9 @@ impl CompositeCollider {
     pub fn new(parts: Vec<ColliderPart>) -> Result<Self, CompositeColliderError> {
         let mut iter = parts.iter().copied();
         let first = iter.next().ok_or(CompositeColliderError::Empty)?;
-        let mut local_aabb = first
-            .collider
-            .aabb(first.local_transform)
-            .ok_or(CompositeColliderError::BoundaryOverflow)?;
+        let mut local_aabb = first.collider.aabb(first.local_transform);
         for part in iter {
-            let part_aabb = part
-                .collider
-                .aabb(part.local_transform)
-                .ok_or(CompositeColliderError::BoundaryOverflow)?;
+            let part_aabb = part.collider.aabb(part.local_transform);
             local_aabb = local_aabb.union(part_aabb);
         }
 
@@ -79,15 +72,17 @@ impl CompositeCollider {
         self.local_aabb
     }
 
-    pub fn aabb(&self, transform: Transform) -> Option<Aabb> {
+    pub fn aabb(&self, transform: Transform) -> Aabb {
         let mut iter = self.parts.iter().copied();
-        let first = iter.next()?;
-        let first_transform = transform.checked_compose(first.local_transform)?;
-        let mut result = first.collider.aabb(first_transform)?;
+        let first = iter
+            .next()
+            .expect("a composite collider always contains at least one part");
+        let first_transform = transform.compose(first.local_transform);
+        let mut result = first.collider.aabb(first_transform);
         for part in iter {
-            let part_transform = transform.checked_compose(part.local_transform)?;
-            result = result.union(part.collider.aabb(part_transform)?);
+            let part_transform = transform.compose(part.local_transform);
+            result = result.union(part.collider.aabb(part_transform));
         }
-        Some(result)
+        result
     }
 }

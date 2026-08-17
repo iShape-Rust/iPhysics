@@ -2,6 +2,40 @@ use super::angular_velocity::AngularVelocity;
 
 const ANGLE_SCALE: f64 = (1_u64 << 32) as f64;
 const TAU: f64 = core::f64::consts::TAU;
+const CORDIC_GAIN_Q30: i64 = 652_032_874;
+const CORDIC_ANGLES: [i64; 31] = [
+    536_870_912,
+    316_933_406,
+    167_458_907,
+    85_004_756,
+    42_667_331,
+    21_354_465,
+    10_679_838,
+    5_340_245,
+    2_670_163,
+    1_335_087,
+    667_544,
+    333_772,
+    166_886,
+    83_443,
+    41_722,
+    20_861,
+    10_430,
+    5_215,
+    2_608,
+    1_304,
+    652,
+    326,
+    163,
+    81,
+    41,
+    20,
+    10,
+    5,
+    3,
+    1,
+    1,
+];
 
 /// Orientation stored as an unsigned binary angle.
 ///
@@ -55,6 +89,45 @@ impl Angle {
     #[inline(always)]
     pub const fn raw(self) -> u32 {
         self.0
+    }
+
+    /// Returns sine and cosine as signed Q30 values.
+    #[inline]
+    pub(crate) fn sin_cos_q30(self) -> [i32; 2] {
+        match self.0 {
+            0 => return [0, 1 << 30],
+            0x4000_0000 => return [1 << 30, 0],
+            0x8000_0000 => return [0, -(1 << 30)],
+            0xc000_0000 => return [-(1 << 30), 0],
+            _ => {}
+        }
+
+        let mut z = self.0 as i32 as i64;
+        let mut sign = 1_i64;
+        if z > 1_i64 << 30 {
+            z -= 1_i64 << 31;
+            sign = -1;
+        } else if z < -(1_i64 << 30) {
+            z += 1_i64 << 31;
+            sign = -1;
+        }
+
+        let mut cos = CORDIC_GAIN_Q30;
+        let mut sin = 0_i64;
+        for (shift, angle) in CORDIC_ANGLES.into_iter().enumerate() {
+            let old_cos = cos;
+            if z >= 0 {
+                cos -= sin >> shift;
+                sin += old_cos >> shift;
+                z -= angle;
+            } else {
+                cos += sin >> shift;
+                sin -= old_cos >> shift;
+                z += angle;
+            }
+        }
+
+        [(sin * sign) as i32, (cos * sign) as i32]
     }
 
     /// Returns the angle in the range `[0, 2π)`.
@@ -111,5 +184,17 @@ impl AngleDelta {
     #[inline(always)]
     pub fn to_radians(self) -> f64 {
         self.0 as f64 * (TAU / ANGLE_SCALE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn q30_sin_cos_uses_conventional_order() {
+        assert_eq!(Angle::ZERO.sin_cos_q30(), [0, 1 << 30]);
+        assert_eq!(Angle::QUARTER_TURN.sin_cos_q30(), [1 << 30, 0]);
+        assert_eq!(Angle::HALF_TURN.sin_cos_q30(), [0, -(1 << 30)]);
     }
 }

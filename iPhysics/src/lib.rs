@@ -9,7 +9,7 @@ pub mod quantity;
 pub mod transform;
 pub mod world;
 
-pub use body::{Body, BodyId, BodyState, Material, SleepConfig, StaticBody, StaticBodyError};
+pub use body::{Body, BodyId, BodyState, Material, SleepConfig, StaticBody};
 pub use collider::{
     Circle, Collider, ColliderPart, CompositeCollider, CompositeColliderError, Convex, ConvexError,
 };
@@ -20,4 +20,4 @@ pub use quantity::{
     LinearVelocity, Mass, Position,
 };
 pub use transform::Transform;
-pub use world::{AddBodyError, StepError, StepStats, World, WorldSettings};
+pub use world::{AddBodyError, StepStats, World, WorldSettings};

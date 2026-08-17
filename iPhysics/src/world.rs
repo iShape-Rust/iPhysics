@@ -6,7 +6,7 @@ use crate::collision::Contact;
 use alloc::vec::Vec;
 
 pub use settings::WorldSettings;
-pub use simulation::{StepError, StepStats};
+pub use simulation::StepStats;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddBodyError {
@@ -233,8 +233,7 @@ mod tests {
             )
             .unwrap(),
             Material::INELASTIC,
-        )
-        .unwrap();
+        );
 
         assert_eq!(
             world.add_static_body(static_body),

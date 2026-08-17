@@ -88,7 +88,6 @@ struct PhysicsDebugApp {
     speed: f32,
     accumulator: Duration,
     last_frame: Instant,
-    error: Option<String>,
 }
 
 impl Default for PhysicsDebugApp {
@@ -107,7 +106,6 @@ impl Default for PhysicsDebugApp {
             speed: 1.0,
             accumulator: Duration::ZERO,
             last_frame: Instant::now(),
-            error: None,
         }
     }
 }
@@ -186,10 +184,6 @@ impl PhysicsDebugApp {
         ui.monospace(format!("contacts          {}", self.stats.contacts));
         ui.monospace(format!("sleeping bodies   {}", self.stats.sleeping_bodies));
 
-        if let Some(error) = &self.error {
-            ui.colored_label(Color32::from_rgb(240, 118, 118), error);
-        }
-
         if let Some(replay) = &self.replay {
             ui.separator();
             ui.label("Rollback diagnostic");
@@ -262,18 +256,18 @@ impl PhysicsDebugApp {
                 color,
             );
 
-            if let Some(aabb) = body.collider().aabb(body.state().transform()) {
-                paint_aabb(&painter, rect, &self.camera, aabb);
-            }
+            paint_aabb(
+                &painter,
+                rect,
+                &self.camera,
+                body.collider().aabb(body.state().transform()),
+            );
         }
 
         for body in self.world.static_bodies() {
             let color = Color32::from_rgb(126, 132, 145);
             for part in body.collider().parts() {
-                let Some(transform) = body.transform().checked_compose(part.local_transform())
-                else {
-                    continue;
-                };
+                let transform = body.transform().compose(part.local_transform());
                 paint_collider(
                     &painter,
                     rect,
@@ -368,7 +362,7 @@ impl PhysicsDebugApp {
             .min(Duration::from_millis(250));
         self.last_frame = now;
 
-        if !self.running || self.error.is_some() {
+        if !self.running {
             self.accumulator = Duration::ZERO;
             return;
         }
@@ -379,39 +373,20 @@ impl PhysicsDebugApp {
             self.accumulator -= TICK_DURATION;
             self.step_once();
             steps += 1;
-            if self.error.is_some() {
-                break;
-            }
         }
     }
 
     fn step_once(&mut self) {
-        match self.world.step() {
-            Ok(stats) => self.stats = stats,
-            Err(error) => {
-                self.error = Some(format!("step failed: {error:?}"));
-                self.running = false;
-                return;
-            }
-        }
+        self.stats = self.world.step();
         self.tick += 1;
 
         if let Some(replay) = &mut self.replay {
-            match replay.world.step() {
-                Ok(replay_stats) => {
-                    replay.matched = self.world.bodies() == replay.world.bodies()
-                        && self.world.contacts() == replay.world.contacts()
-                        && self.stats == replay_stats;
-                    if !replay.matched && replay.mismatch_tick.is_none() {
-                        replay.mismatch_tick = Some(self.tick);
-                    }
-                }
-                Err(error) => {
-                    replay.matched = false;
-                    replay.mismatch_tick.get_or_insert(self.tick);
-                    self.error = Some(format!("replay step failed: {error:?}"));
-                    self.running = false;
-                }
+            let replay_stats = replay.world.step();
+            replay.matched = self.world.bodies() == replay.world.bodies()
+                && self.world.contacts() == replay.world.contacts()
+                && self.stats == replay_stats;
+            if !replay.matched && replay.mismatch_tick.is_none() {
+                replay.mismatch_tick = Some(self.tick);
             }
 
             if replay.matched && self.tick.is_multiple_of(CHECKPOINT_INTERVAL) {
@@ -433,7 +408,6 @@ impl PhysicsDebugApp {
         self.stats = StepStats::default();
         self.accumulator = Duration::ZERO;
         self.last_frame = Instant::now();
-        self.error = None;
         self.camera = Camera::default();
     }
 }
@@ -462,7 +436,7 @@ fn paint_collider(
             let points = convex
                 .vertices()
                 .iter()
-                .filter_map(|vertex| transform.checked_apply(*vertex))
+                .map(|vertex| transform.apply(*vertex))
                 .map(|position| screen_position(camera, rect, position))
                 .collect::<Vec<_>>();
             if points.len() == convex.len() {
@@ -779,7 +753,6 @@ fn static_support(id: u64) -> StaticBody {
         .expect("static support collider must fit"),
         Material::INELASTIC,
     )
-    .expect("static support boundary must fit")
 }
 
 fn composite_playground(id: u64) -> StaticBody {
@@ -816,7 +789,6 @@ fn composite_playground(id: u64) -> StaticBody {
         CompositeCollider::new(parts).expect("playground parts must fit"),
         Material::INELASTIC,
     )
-    .expect("playground boundary must fit")
 }
 
 fn add(world: &mut World, body: Body) {
@@ -863,7 +835,7 @@ mod tests {
         for scenario in Scenario::ALL {
             let mut world = build_world(scenario);
             for _ in 0..4 {
-                world.step().unwrap();
+                world.step();
             }
         }
     }
@@ -878,7 +850,7 @@ mod tests {
             let mut world = build_world(scenario);
             let mut contact_seen = false;
             for _ in 0..256 {
-                contact_seen |= world.step().unwrap().contacts > 0;
+                contact_seen |= world.step().contacts > 0;
             }
             assert!(contact_seen, "{} produced no contacts", scenario.label());
         }
@@ -907,8 +879,8 @@ mod tests {
         let mut replay = reference.clone();
 
         for tick in 0..256 {
-            let reference_stats = reference.step().unwrap();
-            let replay_stats = replay.step().unwrap();
+            let reference_stats = reference.step();
+            let replay_stats = replay.step();
             assert!(
                 reference.bodies() == replay.bodies(),
                 "body mismatch at tick {tick}"
@@ -930,7 +902,7 @@ mod tests {
         let mut world = build_world(Scenario::SleepOnSupport);
 
         for _ in 0..512 {
-            world.step().unwrap();
+            world.step();
             if world.bodies().iter().any(|body| body.state().is_sleeping()) {
                 return;
             }

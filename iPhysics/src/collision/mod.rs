@@ -1,7 +1,10 @@
-mod circle;
-mod collider;
+mod circle_circle;
+mod circle_convex;
 mod contact;
+mod convex_convex;
+mod dispatch;
+mod sat;
 
-pub use circle::collide_circles;
-pub(crate) use collider::collide;
+pub use circle_circle::collide as collide_circles;
 pub use contact::Contact;
+pub(crate) use dispatch::collide;

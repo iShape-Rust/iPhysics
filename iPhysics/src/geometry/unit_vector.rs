@@ -28,10 +28,10 @@ impl UnitVector {
 
         let [x, y] = vector.raw();
         let scale = 1_i64 << Self::FRACTION_BITS;
-        Some(Self {
-            x: i32::try_from(x as i64 * scale / length as i64).ok()?,
-            y: i32::try_from(y as i64 * scale / length as i64).ok()?,
-        })
+        Some(Self::from_raw(
+            (x as i64 * scale / length as i64) as i32,
+            (y as i64 * scale / length as i64) as i32,
+        ))
     }
 
     /// Projects a bounded raw vector onto this direction, preserving the
@@ -39,7 +39,7 @@ impl UnitVector {
     #[inline(always)]
     pub const fn dot_raw(self, vector: DiffVec2) -> i64 {
         round_shift_i64(
-            vector.dot(DiffVec2::from_raw(self.x, self.y)),
+            vector.dot(DiffVec2::from_raw_unchecked(self.x, self.y)),
             Self::FRACTION_BITS,
         )
     }
@@ -79,6 +79,18 @@ impl UnitVector {
     #[inline(always)]
     pub const fn raw(self) -> [i32; 2] {
         [self.x, self.y]
+    }
+}
+
+impl core::ops::Neg for UnitVector {
+    type Output = Self;
+
+    #[inline(always)]
+    fn neg(self) -> Self::Output {
+        Self {
+            x: -self.x,
+            y: -self.y,
+        }
     }
 }
 
