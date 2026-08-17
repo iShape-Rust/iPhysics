@@ -5,7 +5,7 @@ use super::{ACCELERATION_TO_VELOCITY_SHIFT, KINEMATIC_FRACTION_BITS};
 /// Linear velocity in metres per second, stored as signed Q24 components.
 ///
 /// - Resolution: `2^-24 m/s`, approximately `0.000_000_059_6 m/s`.
-/// - Storage range: `-128 m/s..128 m/s` (exclusive upper bound).
+/// - Storage range: `-128 m/s...128 m/s` (exclusive upper bound).
 /// - Intended gameplay limit: vector length at most `100 m/s`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct LinearVelocity(RawVec2);

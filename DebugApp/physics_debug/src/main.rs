@@ -5,8 +5,9 @@ use camera::Camera;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use grid::Grid;
 use i_physics::{
-    Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Length, LinearAcceleration,
-    LinearVelocity, Mass, Material, Position, StepStats, Transform, World, WorldSettings,
+    Angle, AngularVelocity, Body, BodyId, BodyState, Circle, CompositeCollider, Length,
+    LinearAcceleration, LinearVelocity, Mass, Material, Position, StaticBody, StepStats, Transform,
+    World, WorldSettings,
 };
 use std::time::{Duration, Instant};
 
@@ -161,7 +162,11 @@ impl PhysicsDebugApp {
 
         ui.separator();
         ui.monospace(format!("tick              {}", self.tick));
-        ui.monospace(format!("bodies            {}", self.world.body_count()));
+        ui.monospace(format!("dynamic bodies    {}", self.world.body_count()));
+        ui.monospace(format!(
+            "static bodies     {}",
+            self.world.static_body_count()
+        ));
         ui.monospace(format!("tested pairs      {}", self.stats.tested_pairs));
         ui.monospace(format!("AABB pairs        {}", self.stats.aabb_pairs));
         ui.monospace(format!("contacts          {}", self.stats.contacts));
@@ -214,15 +219,16 @@ impl PhysicsDebugApp {
             .handle_input(ui, &response, rect, &mut self.camera);
         self.grid.paint(&painter, rect, &self.camera);
 
-        for (id, body) in self.world.bodies() {
+        for body in self.world.bodies() {
             let [x, y] = body.state().transform().position.to_meters();
             let center = self
                 .camera
                 .screen_from_world(rect, Pos2::new(x as f32, y as f32));
-            let radius = body.collider().radius().to_meters() as f32 * self.camera.zoom;
-            let color = if !body.is_dynamic() {
-                Color32::from_rgb(126, 132, 145)
-            } else if body.state().is_sleeping() {
+            let Some(circle) = body.collider().as_circle() else {
+                continue;
+            };
+            let radius = circle.radius().to_meters() as f32 * self.camera.zoom;
+            let color = if body.state().is_sleeping() {
                 Color32::from_rgb(78, 211, 183)
             } else {
                 Color32::from_rgb(72, 161, 255)
@@ -234,12 +240,12 @@ impl PhysicsDebugApp {
             painter.text(
                 center + Vec2::new(0.0, -radius - 5.0),
                 Align2::CENTER_BOTTOM,
-                format!("{}:{}", id.index(), id.revision()),
+                body.id().raw().to_string(),
                 FontId::monospace(11.0),
                 color,
             );
 
-            if let Some(aabb) = body.collider().aabb(body.state().transform().position) {
+            if let Some(aabb) = body.collider().aabb(body.state().transform()) {
                 let [min_x, min_y] = aabb.min().to_meters();
                 let [max_x, max_y] = aabb.max().to_meters();
                 let screen_a = self
@@ -254,6 +260,26 @@ impl PhysicsDebugApp {
                     Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(106, 226, 125, 150)),
                     StrokeKind::Inside,
                 );
+            }
+        }
+
+        for body in self.world.static_bodies() {
+            for part in body.collider().parts() {
+                let Some(transform) = body.transform().checked_compose(part.local_transform())
+                else {
+                    continue;
+                };
+                let Some(circle) = part.collider().as_circle() else {
+                    continue;
+                };
+                let [x, y] = transform.position.to_meters();
+                let center = self
+                    .camera
+                    .screen_from_world(rect, Pos2::new(x as f32, y as f32));
+                let radius = circle.radius().to_meters() as f32 * self.camera.zoom;
+                let color = Color32::from_rgb(126, 132, 145);
+                painter.circle_filled(center, radius, color.gamma_multiply(0.30));
+                painter.circle_stroke(center, radius, Stroke::new(2.0_f32, color));
             }
         }
 
@@ -282,12 +308,15 @@ impl PhysicsDebugApp {
             } else {
                 Color32::from_rgb(255, 93, 117)
             };
-            for (_id, body) in replay.world.bodies() {
+            for body in replay.world.bodies() {
                 let [x, y] = body.state().transform().position.to_meters();
                 let center = self
                     .camera
                     .screen_from_world(rect, Pos2::new(x as f32, y as f32));
-                let radius = body.collider().radius().to_meters() as f32 * self.camera.zoom + 3.0;
+                let Some(circle) = body.collider().as_circle() else {
+                    continue;
+                };
+                let radius = circle.radius().to_meters() as f32 * self.camera.zoom + 3.0;
                 painter.circle_stroke(center, radius, Stroke::new(1.0_f32, color));
             }
 
@@ -362,7 +391,7 @@ impl PhysicsDebugApp {
         if let Some(replay) = &mut self.replay {
             match replay.world.step() {
                 Ok(replay_stats) => {
-                    replay.matched = self.world.bodies().eq(replay.world.bodies())
+                    replay.matched = self.world.bodies() == replay.world.bodies()
                         && self.world.contacts() == replay.world.contacts()
                         && self.stats == replay_stats;
                     if !replay.matched && replay.mismatch_tick.is_none() {
@@ -407,7 +436,7 @@ fn build_world(scenario: Scenario) -> World {
             let mut world = World::default();
             add(
                 &mut world,
-                dynamic(0.0, 5.0, 0.5, 0.0, 0.0, Material::INELASTIC),
+                dynamic(1, 0.0, 5.0, 0.5, 0.0, 0.0, Material::INELASTIC),
             );
             world
         }
@@ -415,37 +444,40 @@ fn build_world(scenario: Scenario) -> World {
             let mut world = zero_gravity_world();
             add(
                 &mut world,
-                dynamic(-3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
+                dynamic(1, -3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
             );
             add(
                 &mut world,
-                dynamic(3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
+                dynamic(2, 3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
             );
             world
         }
         Scenario::SleepOnSupport => {
             let mut world = World::default();
-            add(&mut world, static_support());
+            add_static(&mut world, static_support(1));
             add(
                 &mut world,
-                dynamic(0.0, 4.0, 0.5, 0.0, 0.0, Material::INELASTIC),
+                dynamic(2, 0.0, 4.0, 0.5, 0.0, 0.0, Material::INELASTIC),
             );
             world
         }
         Scenario::CirclePile => {
             let mut world = World::default();
-            add(&mut world, static_support());
-            for (x, y) in [
+            add_static(&mut world, static_support(1));
+            for (offset, (x, y)) in [
                 (-1.05, 0.15),
                 (0.0, 0.15),
                 (1.05, 0.15),
                 (-0.53, 1.10),
                 (0.53, 1.10),
                 (0.0, 2.05),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 add(
                     &mut world,
-                    dynamic(x, y, 0.5, 0.0, 0.0, Material::INELASTIC),
+                    dynamic(offset as u64 + 2, x, y, 0.5, 0.0, 0.0, Material::INELASTIC),
                 );
             }
             world
@@ -454,15 +486,15 @@ fn build_world(scenario: Scenario) -> World {
             let mut world = zero_gravity_world();
             add(
                 &mut world,
-                dynamic(-3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
+                dynamic(1, -3.0, 1.0, 0.6, 4.0, 0.0, Material::ELASTIC),
             );
             add(
                 &mut world,
-                dynamic(3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
+                dynamic(2, 3.0, 1.0, 0.6, -4.0, 0.0, Material::ELASTIC),
             );
             add(
                 &mut world,
-                dynamic(0.0, 3.0, 0.45, 0.0, -1.25, Material::ELASTIC),
+                dynamic(3, 0.0, 3.0, 0.45, 0.0, -1.25, Material::ELASTIC),
             );
             world
         }
@@ -473,8 +505,9 @@ fn zero_gravity_world() -> World {
     World::new(WorldSettings::new(LinearAcceleration::ZERO))
 }
 
-fn dynamic(x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Material) -> Body {
+fn dynamic(id: u64, x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Material) -> Body {
     Body::dynamic(
+        BodyId::new(id),
         Circle::new(Length::from_meters(radius).expect("scenario radius must fit"))
             .expect("scenario radius must be positive"),
         Mass::ONE,
@@ -490,22 +523,31 @@ fn dynamic(x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Material) ->
     )
 }
 
-fn static_support() -> Body {
-    Body::static_body(
-        Circle::new(Length::from_meters(100.0).unwrap()).unwrap(),
+fn static_support(id: u64) -> StaticBody {
+    StaticBody::new(
+        BodyId::new(id),
+        Transform::new(Position::from_meters(0.0, -100.5).unwrap(), Angle::ZERO),
+        CompositeCollider::single(
+            Circle::new(Length::from_meters(100.0).unwrap())
+                .unwrap()
+                .into(),
+        )
+        .expect("static support collider must fit"),
         Material::INELASTIC,
-        BodyState::new(
-            Transform::new(Position::from_meters(0.0, -100.5).unwrap(), Angle::ZERO),
-            LinearVelocity::ZERO,
-            AngularVelocity::ZERO,
-        ),
     )
+    .expect("static support boundary must fit")
 }
 
-fn add(world: &mut World, body: Body) -> BodyId {
+fn add(world: &mut World, body: Body) {
     world
         .add_body(body)
-        .expect("scenario must fit body store capacity")
+        .expect("scenario body IDs must be unique")
+}
+
+fn add_static(world: &mut World, body: StaticBody) {
+    world
+        .add_static_body(body)
+        .expect("scenario body IDs must be unique")
 }
 
 fn legend(ui: &mut egui::Ui, color: Color32, text: &str) {
@@ -554,7 +596,7 @@ mod tests {
             let reference_stats = reference.step().unwrap();
             let replay_stats = replay.step().unwrap();
             assert!(
-                reference.bodies().eq(replay.bodies()),
+                reference.bodies() == replay.bodies(),
                 "body mismatch at tick {tick}"
             );
             assert_eq!(
@@ -575,10 +617,7 @@ mod tests {
 
         for _ in 0..512 {
             world.step().unwrap();
-            if world
-                .bodies()
-                .any(|(_, body)| body.is_dynamic() && body.state().is_sleeping())
-            {
+            if world.bodies().iter().any(|body| body.state().is_sleeping()) {
                 return;
             }
         }

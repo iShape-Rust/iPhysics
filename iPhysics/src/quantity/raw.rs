@@ -66,6 +66,26 @@ pub(super) fn quantize_f64(value: f64, fraction_bits: u32) -> Option<i32> {
     }
 }
 
+#[inline]
+pub(super) fn quantize_u32_f64(value: f64, fraction_bits: u32) -> Option<u32> {
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+
+    let scale = (1_u64 << fraction_bits) as f64;
+    let scaled = value * scale;
+    if scaled > u32::MAX as f64 {
+        return None;
+    }
+
+    let truncated = scaled as u32;
+    if scaled - truncated as f64 >= 0.5 {
+        truncated.checked_add(1)
+    } else {
+        Some(truncated)
+    }
+}
+
 /// Rounds to the nearest integer; midpoint values are rounded away from zero.
 #[inline(always)]
 pub(super) fn shift_round(value: i64, shift: u32) -> i64 {

@@ -8,8 +8,10 @@ mod angle;
 mod angular_acceleration;
 mod angular_velocity;
 mod integration;
+mod length;
 mod linear_acceleration;
 mod linear_velocity;
+mod mass;
 mod position;
 mod raw;
 
@@ -17,8 +19,10 @@ pub use angle::{Angle, AngleDelta};
 pub use angular_acceleration::AngularAcceleration;
 pub use angular_velocity::AngularVelocity;
 pub use integration::{checked_integrate, checked_integrate_angular};
+pub use length::Length;
 pub use linear_acceleration::LinearAcceleration;
 pub use linear_velocity::LinearVelocity;
+pub use mass::Mass;
 pub use position::Position;
 
 /// Number of fixed simulation ticks in one second.

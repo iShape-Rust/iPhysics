@@ -58,9 +58,9 @@ impl Default for SleepConfig {
 /// Complete mutable body state required by deterministic rollback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct BodyState {
-    transform: Transform,
-    linear_velocity: LinearVelocity,
-    angular_velocity: AngularVelocity,
+    pub(crate) transform: Transform,
+    pub(crate) linear_velocity: LinearVelocity,
+    pub(crate) angular_velocity: AngularVelocity,
     sleep_ticks: u8,
     sleeping: bool,
 }
