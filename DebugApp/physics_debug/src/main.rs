@@ -5,9 +5,9 @@ use camera::Camera;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use grid::Grid;
 use i_physics::{
-    Angle, AngularVelocity, Body, BodyId, BodyState, Circle, CompositeCollider, Length,
-    LinearAcceleration, LinearVelocity, Mass, Material, Position, StaticBody, StepStats, Transform,
-    World, WorldSettings,
+    Aabb, Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Collider, ColliderPart,
+    CompositeCollider, Convex, Length, LinearAcceleration, LinearVelocity, Mass, Material,
+    Position, StaticBody, StepStats, Transform, World, WorldSettings,
 };
 use std::time::{Duration, Instant};
 
@@ -20,15 +20,21 @@ enum Scenario {
     ElasticCircles,
     SleepOnSupport,
     CirclePile,
+    CircleVsConvex,
+    ConvexVsConvex,
+    CompositePlayground,
     ReplayRollback,
 }
 
 impl Scenario {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 8] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
         Self::CirclePile,
+        Self::CircleVsConvex,
+        Self::ConvexVsConvex,
+        Self::CompositePlayground,
         Self::ReplayRollback,
     ];
 
@@ -38,6 +44,9 @@ impl Scenario {
             Self::ElasticCircles => "Two elastic circles",
             Self::SleepOnSupport => "Sleep on static support",
             Self::CirclePile => "Circle pile / pyramid",
+            Self::CircleVsConvex => "Circle vs convex",
+            Self::ConvexVsConvex => "Convex vs convex",
+            Self::CompositePlayground => "Composite static playground",
             Self::ReplayRollback => "Replay / rollback comparison",
         }
     }
@@ -48,6 +57,11 @@ impl Scenario {
             Self::ElasticCircles => "Equal masses and restitution 1 exchange velocities.",
             Self::SleepOnSupport => "A falling circle settles on a large static circle.",
             Self::CirclePile => "Six circles start in a small pyramid above a curved support.",
+            Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
+            Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
+            Self::CompositePlayground => {
+                "Circles and convex bodies fall onto a multi-part static collider."
+            }
             Self::ReplayRollback => {
                 "A cloned checkpoint advances independently and is compared every tick."
             }
@@ -220,67 +234,61 @@ impl PhysicsDebugApp {
         self.grid.paint(&painter, rect, &self.camera);
 
         for body in self.world.bodies() {
-            let [x, y] = body.state().transform().position.to_meters();
-            let center = self
-                .camera
-                .screen_from_world(rect, Pos2::new(x as f32, y as f32));
-            let Some(circle) = body.collider().as_circle() else {
-                continue;
-            };
-            let radius = circle.radius().to_meters() as f32 * self.camera.zoom;
             let color = if body.state().is_sleeping() {
                 Color32::from_rgb(78, 211, 183)
             } else {
                 Color32::from_rgb(72, 161, 255)
             };
 
-            painter.circle_filled(center, radius, color.gamma_multiply(0.30));
-            painter.circle_stroke(center, radius, Stroke::new(2.0_f32, color));
-            painter.circle_filled(center, 2.5, color);
-            painter.text(
-                center + Vec2::new(0.0, -radius - 5.0),
-                Align2::CENTER_BOTTOM,
-                body.id().raw().to_string(),
-                FontId::monospace(11.0),
+            paint_collider(
+                &painter,
+                rect,
+                &self.camera,
+                body.collider(),
+                body.state().transform(),
+                color,
+                2.0,
+            );
+            paint_body_id(
+                &painter,
+                rect,
+                &self.camera,
+                body.id(),
+                body.state().transform(),
                 color,
             );
 
             if let Some(aabb) = body.collider().aabb(body.state().transform()) {
-                let [min_x, min_y] = aabb.min().to_meters();
-                let [max_x, max_y] = aabb.max().to_meters();
-                let screen_a = self
-                    .camera
-                    .screen_from_world(rect, Pos2::new(min_x as f32, min_y as f32));
-                let screen_b = self
-                    .camera
-                    .screen_from_world(rect, Pos2::new(max_x as f32, max_y as f32));
-                painter.rect_stroke(
-                    Rect::from_two_pos(screen_a, screen_b),
-                    0.0,
-                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(106, 226, 125, 150)),
-                    StrokeKind::Inside,
-                );
+                paint_aabb(&painter, rect, &self.camera, aabb);
             }
         }
 
         for body in self.world.static_bodies() {
+            let color = Color32::from_rgb(126, 132, 145);
             for part in body.collider().parts() {
                 let Some(transform) = body.transform().checked_compose(part.local_transform())
                 else {
                     continue;
                 };
-                let Some(circle) = part.collider().as_circle() else {
-                    continue;
-                };
-                let [x, y] = transform.position.to_meters();
-                let center = self
-                    .camera
-                    .screen_from_world(rect, Pos2::new(x as f32, y as f32));
-                let radius = circle.radius().to_meters() as f32 * self.camera.zoom;
-                let color = Color32::from_rgb(126, 132, 145);
-                painter.circle_filled(center, radius, color.gamma_multiply(0.30));
-                painter.circle_stroke(center, radius, Stroke::new(2.0_f32, color));
+                paint_collider(
+                    &painter,
+                    rect,
+                    &self.camera,
+                    part.collider(),
+                    transform,
+                    color,
+                    2.0,
+                );
             }
+            paint_body_id(
+                &painter,
+                rect,
+                &self.camera,
+                body.id(),
+                body.transform(),
+                color,
+            );
+            paint_aabb(&painter, rect, &self.camera, body.aabb());
         }
 
         for contact in self.world.contacts() {
@@ -309,15 +317,15 @@ impl PhysicsDebugApp {
                 Color32::from_rgb(255, 93, 117)
             };
             for body in replay.world.bodies() {
-                let [x, y] = body.state().transform().position.to_meters();
-                let center = self
-                    .camera
-                    .screen_from_world(rect, Pos2::new(x as f32, y as f32));
-                let Some(circle) = body.collider().as_circle() else {
-                    continue;
-                };
-                let radius = circle.radius().to_meters() as f32 * self.camera.zoom + 3.0;
-                painter.circle_stroke(center, radius, Stroke::new(1.0_f32, color));
+                paint_collider(
+                    &painter,
+                    rect,
+                    &self.camera,
+                    body.collider(),
+                    body.state().transform(),
+                    color,
+                    1.0,
+                );
             }
 
             painter.text(
@@ -430,6 +438,78 @@ impl PhysicsDebugApp {
     }
 }
 
+fn paint_collider(
+    painter: &egui::Painter,
+    rect: Rect,
+    camera: &Camera,
+    collider: Collider,
+    transform: Transform,
+    color: Color32,
+    stroke_width: f32,
+) {
+    let stroke = Stroke::new(stroke_width, color);
+    let fill = color.gamma_multiply(0.30);
+
+    match collider {
+        Collider::Circle(circle) => {
+            let center = screen_position(camera, rect, transform.position);
+            let radius = circle.radius().to_meters() as f32 * camera.zoom;
+            painter.circle_filled(center, radius, fill);
+            painter.circle_stroke(center, radius, stroke);
+            painter.circle_filled(center, 2.5, color);
+        }
+        Collider::Convex(convex) => {
+            let points = convex
+                .vertices()
+                .iter()
+                .filter_map(|vertex| transform.checked_apply(*vertex))
+                .map(|position| screen_position(camera, rect, position))
+                .collect::<Vec<_>>();
+            if points.len() == convex.len() {
+                painter.add(egui::Shape::convex_polygon(points, fill, stroke));
+            }
+            painter.circle_filled(
+                screen_position(camera, rect, transform.position),
+                2.5,
+                color,
+            );
+        }
+    }
+}
+
+fn paint_aabb(painter: &egui::Painter, rect: Rect, camera: &Camera, aabb: Aabb) {
+    let screen_min = screen_position(camera, rect, aabb.min());
+    let screen_max = screen_position(camera, rect, aabb.max());
+    painter.rect_stroke(
+        Rect::from_two_pos(screen_min, screen_max),
+        0.0,
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(106, 226, 125, 150)),
+        StrokeKind::Inside,
+    );
+}
+
+fn paint_body_id(
+    painter: &egui::Painter,
+    rect: Rect,
+    camera: &Camera,
+    id: BodyId,
+    transform: Transform,
+    color: Color32,
+) {
+    painter.text(
+        screen_position(camera, rect, transform.position) + Vec2::new(0.0, -8.0),
+        Align2::CENTER_BOTTOM,
+        id.raw().to_string(),
+        FontId::monospace(11.0),
+        color,
+    );
+}
+
+fn screen_position(camera: &Camera, rect: Rect, position: Position) -> Pos2 {
+    let [x, y] = position.to_meters();
+    camera.screen_from_world(rect, Pos2::new(x as f32, y as f32))
+}
+
 fn build_world(scenario: Scenario) -> World {
     match scenario {
         Scenario::FreeFall => {
@@ -482,6 +562,92 @@ fn build_world(scenario: Scenario) -> World {
             }
             world
         }
+        Scenario::CircleVsConvex => {
+            let mut world = zero_gravity_world();
+            add(
+                &mut world,
+                dynamic(1, -3.0, 1.0, 0.6, 3.0, 0.0, Material::ELASTIC),
+            );
+            add(
+                &mut world,
+                dynamic_convex(
+                    2,
+                    3.0,
+                    1.0,
+                    angle_degrees(20.0),
+                    rectangle(0.75, 0.55),
+                    -3.0,
+                    0.0,
+                    Material::ELASTIC,
+                ),
+            );
+            world
+        }
+        Scenario::ConvexVsConvex => {
+            let mut world = zero_gravity_world();
+            add(
+                &mut world,
+                dynamic_convex(
+                    1,
+                    -3.0,
+                    1.0,
+                    angle_degrees(-15.0),
+                    triangle(0.85),
+                    3.0,
+                    0.0,
+                    Material::ELASTIC,
+                ),
+            );
+            add(
+                &mut world,
+                dynamic_convex(
+                    2,
+                    3.0,
+                    1.0,
+                    angle_degrees(12.0),
+                    hexagon(0.75),
+                    -3.0,
+                    0.0,
+                    Material::ELASTIC,
+                ),
+            );
+            world
+        }
+        Scenario::CompositePlayground => {
+            let mut world = World::default();
+            add_static(&mut world, composite_playground(1));
+            add(
+                &mut world,
+                dynamic(2, -2.4, 4.0, 0.55, 0.0, 0.0, Material::INELASTIC),
+            );
+            add(
+                &mut world,
+                dynamic_convex(
+                    3,
+                    0.0,
+                    5.2,
+                    angle_degrees(18.0),
+                    rectangle(0.65, 0.5),
+                    0.0,
+                    0.0,
+                    Material::INELASTIC,
+                ),
+            );
+            add(
+                &mut world,
+                dynamic_convex(
+                    4,
+                    2.4,
+                    4.6,
+                    angle_degrees(-12.0),
+                    triangle(0.7),
+                    0.0,
+                    0.0,
+                    Material::INELASTIC,
+                ),
+            );
+            world
+        }
         Scenario::ReplayRollback => {
             let mut world = zero_gravity_world();
             add(
@@ -506,21 +672,91 @@ fn zero_gravity_world() -> World {
 }
 
 fn dynamic(id: u64, x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Material) -> Body {
+    let collider = Circle::new(Length::from_meters(radius).expect("scenario radius must fit"))
+        .expect("scenario radius must be positive");
+    dynamic_collider(id, x, y, Angle::ZERO, collider, vx, vy, material)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dynamic_convex(
+    id: u64,
+    x: f64,
+    y: f64,
+    angle: Angle,
+    collider: Convex,
+    vx: f64,
+    vy: f64,
+    material: Material,
+) -> Body {
+    dynamic_collider(id, x, y, angle, collider, vx, vy, material)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dynamic_collider(
+    id: u64,
+    x: f64,
+    y: f64,
+    angle: Angle,
+    collider: impl Into<Collider>,
+    vx: f64,
+    vy: f64,
+    material: Material,
+) -> Body {
     Body::dynamic(
         BodyId::new(id),
-        Circle::new(Length::from_meters(radius).expect("scenario radius must fit"))
-            .expect("scenario radius must be positive"),
+        collider,
         Mass::ONE,
         material,
         BodyState::new(
             Transform::new(
                 Position::from_meters(x, y).expect("scenario position must fit"),
-                Angle::ZERO,
+                angle,
             ),
             LinearVelocity::from_meters_per_second(vx, vy).expect("scenario velocity must fit"),
             AngularVelocity::ZERO,
         ),
     )
+}
+
+fn rectangle(half_width: f64, half_height: f64) -> Convex {
+    convex(&[
+        (-half_width, -half_height),
+        (half_width, -half_height),
+        (half_width, half_height),
+        (-half_width, half_height),
+    ])
+}
+
+fn triangle(radius: f64) -> Convex {
+    convex(&[
+        (0.0, radius),
+        (-radius, -radius * 0.75),
+        (radius, -radius * 0.75),
+    ])
+}
+
+fn hexagon(radius: f64) -> Convex {
+    let h = radius * 0.866_025_403_784_438_6;
+    convex(&[
+        (radius, 0.0),
+        (radius * 0.5, h),
+        (-radius * 0.5, h),
+        (-radius, 0.0),
+        (-radius * 0.5, -h),
+        (radius * 0.5, -h),
+    ])
+}
+
+fn convex(vertices: &[(f64, f64)]) -> Convex {
+    let vertices = vertices
+        .iter()
+        .map(|&(x, y)| Position::from_meters(x, y).expect("convex vertex must fit"))
+        .collect::<Vec<_>>();
+    Convex::new(&vertices).expect("scenario vertices must form a strict convex")
+}
+
+fn angle_degrees(degrees: f64) -> Angle {
+    Angle::from_radians(degrees.to_radians()).expect("scenario angle must be finite")
 }
 
 fn static_support(id: u64) -> StaticBody {
@@ -536,6 +772,43 @@ fn static_support(id: u64) -> StaticBody {
         Material::INELASTIC,
     )
     .expect("static support boundary must fit")
+}
+
+fn composite_playground(id: u64) -> StaticBody {
+    let parts = vec![
+        ColliderPart::new(
+            Transform::new(Position::from_meters(0.0, -0.65).unwrap(), Angle::ZERO),
+            rectangle(5.5, 0.3).into(),
+        ),
+        ColliderPart::new(
+            Transform::new(
+                Position::from_meters(-3.3, 0.25).unwrap(),
+                angle_degrees(14.0),
+            ),
+            rectangle(2.0, 0.18).into(),
+        ),
+        ColliderPart::new(
+            Transform::new(
+                Position::from_meters(3.3, 0.25).unwrap(),
+                angle_degrees(-14.0),
+            ),
+            rectangle(2.0, 0.18).into(),
+        ),
+        ColliderPart::new(
+            Transform::new(Position::from_meters(0.0, 0.15).unwrap(), Angle::ZERO),
+            Circle::new(Length::from_meters(0.7).unwrap())
+                .unwrap()
+                .into(),
+        ),
+    ];
+
+    StaticBody::new(
+        BodyId::new(id),
+        Transform::IDENTITY,
+        CompositeCollider::new(parts).expect("playground parts must fit"),
+        Material::INELASTIC,
+    )
+    .expect("playground boundary must fit")
 }
 
 fn add(world: &mut World, body: Body) {
@@ -584,6 +857,22 @@ mod tests {
             for _ in 0..4 {
                 world.step().unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn new_collider_scenes_generate_contacts() {
+        for scenario in [
+            Scenario::CircleVsConvex,
+            Scenario::ConvexVsConvex,
+            Scenario::CompositePlayground,
+        ] {
+            let mut world = build_world(scenario);
+            let mut contact_seen = false;
+            for _ in 0..256 {
+                contact_seen |= world.step().unwrap().contacts > 0;
+            }
+            assert!(contact_seen, "{} produced no contacts", scenario.label());
         }
     }
 
