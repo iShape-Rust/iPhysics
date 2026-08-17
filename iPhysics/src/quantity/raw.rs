@@ -63,9 +63,14 @@ impl DiffVec2 {
     /// would make the sum of two squared components exceed `i64::MAX`.
     #[inline(always)]
     pub const fn from_raw(x: i32, y: i32) -> Self {
+        Self::from_wide_clamped(x as i64, y as i64)
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_wide_clamped(x: i64, y: i64) -> Self {
         Self {
-            x: if x == i32::MIN { i32::MIN + 1 } else { x },
-            y: if y == i32::MIN { i32::MIN + 1 } else { y },
+            x: clamp_diff_component(x),
+            y: clamp_diff_component(y),
         }
     }
 
@@ -87,6 +92,17 @@ impl DiffVec2 {
     #[inline(always)]
     pub const fn squared_magnitude(self) -> u64 {
         self.dot(self) as u64
+    }
+}
+
+#[inline(always)]
+const fn clamp_diff_component(value: i64) -> i32 {
+    if value < -(i32::MAX as i64) {
+        -i32::MAX
+    } else if value > i32::MAX as i64 {
+        i32::MAX
+    } else {
+        value as i32
     }
 }
 
@@ -173,5 +189,9 @@ mod diff_tests {
 
         assert_eq!(max.dot(max), 2 * i32::MAX as i64 * i32::MAX as i64);
         assert_eq!(max.cross(mixed), 2 * i32::MAX as i64 * i32::MAX as i64);
+        assert_eq!(
+            DiffVec2::from_wide_clamped(i64::MIN, i64::MAX).raw(),
+            [-i32::MAX, i32::MAX]
+        );
     }
 }

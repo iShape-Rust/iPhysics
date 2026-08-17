@@ -26,13 +26,14 @@ pub fn collide_circles(
 
     let distance = distance_squared.isqrt();
     let normal = UnitVector::normalized_with_length(delta, distance).unwrap_or(UnitVector::X);
-    let [nx, ny] = normal.raw();
 
     let penetration = radius_sum - distance;
-    let penetration_raw = u32::try_from(penetration).ok()?;
-    let contact_offset = circle_a.radius().raw() as i64 - (penetration as i64 >> 1);
-    let point_x = ax as i64 + round_shift(nx as i64 * contact_offset, 30);
-    let point_y = ay as i64 + round_shift(ny as i64 * contact_offset, 30);
+    debug_assert!(penetration <= i32::MAX as u64);
+    let penetration_raw = penetration as u32;
+    let contact_offset = circle_a.radius().raw() as i32 - (penetration_raw / 2) as i32;
+    let [offset_x, offset_y] = normal.scaled_raw(contact_offset).raw();
+    let point_x = ax as i64 + offset_x as i64;
+    let point_y = ay as i64 + offset_y as i64;
 
     Some(Contact {
         body_a,
@@ -44,16 +45,6 @@ pub fn collide_circles(
         normal,
         penetration: Length::from_raw(penetration_raw),
     })
-}
-
-#[inline(always)]
-fn round_shift(value: i64, shift: u32) -> i64 {
-    let half = 1_i64 << (shift - 1);
-    if value < 0 {
-        -((-value + half) >> shift)
-    } else {
-        (value + half) >> shift
-    }
 }
 
 #[cfg(test)]
@@ -92,5 +83,22 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn contained_circle_uses_signed_contact_offset() {
+        let small = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
+        let large = Circle::new(Length::from_meters(3.0).unwrap()).unwrap();
+        let contact = collide_circles(
+            BodyId::new(1),
+            small,
+            Position::ZERO,
+            BodyId::new(2),
+            large,
+            Position::ZERO,
+        )
+        .unwrap();
+
+        assert_eq!(contact.point.to_meters(), [-1.0, 0.0]);
     }
 }

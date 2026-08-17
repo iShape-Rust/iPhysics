@@ -128,7 +128,7 @@ fn collide_circle_convex(
     }
 
     let (penetration, normal) = best?;
-    let circle_point = offset(circle_center, normal, circle.radius().raw() as i64)?;
+    let circle_point = offset(circle_center, normal, circle.radius().raw() as i32)?;
     let convex_point = support(&vertices, normal, false);
     Some(Contact {
         body_a: circle_body,
@@ -237,24 +237,21 @@ fn midpoint(a: Position, b: Position) -> Option<Position> {
     )
 }
 
-fn offset(point: Position, axis: UnitVector, distance: i64) -> Option<Position> {
+fn offset(point: Position, axis: UnitVector, distance: i32) -> Option<Position> {
     let [x, y] = point.raw();
-    let [nx, ny] = axis.raw();
+    let [offset_x, offset_y] = axis.scaled_raw(distance).raw();
     Position::checked_from_raw(
-        i32::try_from(x as i64 + round_shift_i64(nx as i64 * distance, 30)).ok()?,
-        i32::try_from(y as i64 + round_shift_i64(ny as i64 * distance, 30)).ok()?,
+        i32::try_from(x as i64 + offset_x as i64).ok()?,
+        i32::try_from(y as i64 + offset_y as i64).ok()?,
     )
 }
 
 fn dot(point: Position, axis: UnitVector) -> i64 {
-    let point = DiffVec2::from(point.raw());
-    let axis = DiffVec2::from(axis.raw());
-    round_shift_i64(point.dot(axis), 30)
+    axis.dot_raw(DiffVec2::from(point.raw()))
 }
 
 fn dot_delta(a: Position, b: Position, axis: UnitVector) -> i64 {
-    let axis = DiffVec2::from(axis.raw());
-    round_shift_i64((b - a).dot(axis), 30)
+    axis.dot_raw(b - a)
 }
 
 fn squared_distance(a: Position, b: Position) -> u64 {
@@ -264,16 +261,6 @@ fn squared_distance(a: Position, b: Position) -> u64 {
 fn negate(vector: UnitVector) -> UnitVector {
     let [x, y] = vector.raw();
     UnitVector::from_raw(-x, -y)
-}
-
-#[inline(always)]
-fn round_shift_i64(value: i64, shift: u32) -> i64 {
-    let half = 1_i64 << (shift - 1);
-    if value < 0 {
-        -((-value + half) >> shift)
-    } else {
-        (value + half) >> shift
-    }
 }
 
 #[cfg(test)]

@@ -211,12 +211,8 @@ impl World {
                 ) as i128;
                 let velocity_change =
                     round_shift(-(normal_speed as i128) * ((1_i128 << 16) + restitution), 16);
-                let [nx, ny] = contact.normal.raw();
-                add_velocity(
-                    a,
-                    -round_shift(nx as i128 * velocity_change, 30),
-                    -round_shift(ny as i128 * velocity_change, 30),
-                )?;
+                let [change_x, change_y] = contact.normal.scaled_wide_raw(velocity_change);
+                add_velocity(a, -change_x, -change_y)?;
                 continue;
             }
 
@@ -244,21 +240,14 @@ impl World {
                 round_shift(-(normal_speed as i128) * ((1_i128 << 16) + restitution), 16);
             let change_a = div_round(velocity_change * inverse_a as i128, inverse_sum as i128);
             let change_b = div_round(velocity_change * inverse_b as i128, inverse_sum as i128);
-            let [nx, ny] = contact.normal.raw();
 
             if inverse_a != 0 {
-                add_velocity(
-                    a,
-                    -round_shift(nx as i128 * change_a, 30),
-                    -round_shift(ny as i128 * change_a, 30),
-                )?;
+                let [change_x, change_y] = contact.normal.scaled_wide_raw(change_a);
+                add_velocity(a, -change_x, -change_y)?;
             }
             if inverse_b != 0 {
-                add_velocity(
-                    b,
-                    round_shift(nx as i128 * change_b, 30),
-                    round_shift(ny as i128 * change_b, 30),
-                )?;
+                let [change_x, change_y] = contact.normal.scaled_wide_raw(change_b);
+                add_velocity(b, change_x, change_y)?;
             }
         }
         Ok(())
@@ -278,12 +267,8 @@ impl World {
             }
 
             if let ContactBodyIndex::Static(_) = pair.b {
-                let [nx, ny] = contact.normal.raw();
-                add_position(
-                    &mut self.bodies[pair.a],
-                    -round_shift(nx as i128 * correction as i128, 30),
-                    -round_shift(ny as i128 * correction as i128, 30),
-                )?;
+                let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as i128);
+                add_position(&mut self.bodies[pair.a], -move_x, -move_y)?;
                 continue;
             }
 
@@ -300,20 +285,13 @@ impl World {
 
             let move_a = div_round(correction as i128 * inverse_a as i128, inverse_sum as i128);
             let move_b = div_round(correction as i128 * inverse_b as i128, inverse_sum as i128);
-            let [nx, ny] = contact.normal.raw();
             if inverse_a != 0 {
-                add_position(
-                    a,
-                    -round_shift(nx as i128 * move_a, 30),
-                    -round_shift(ny as i128 * move_a, 30),
-                )?;
+                let [move_x, move_y] = contact.normal.scaled_wide_raw(move_a);
+                add_position(a, -move_x, -move_y)?;
             }
             if inverse_b != 0 {
-                add_position(
-                    b,
-                    round_shift(nx as i128 * move_b, 30),
-                    round_shift(ny as i128 * move_b, 30),
-                )?;
+                let [move_x, move_y] = contact.normal.scaled_wide_raw(move_b);
+                add_position(b, move_x, move_y)?;
             }
         }
         Ok(())
@@ -344,11 +322,9 @@ fn relative_normal_speed(a: &Body, b: Option<&Body>, contact: &Contact) -> i64 {
     let [bvx, bvy] = b
         .map(|body| body.state().linear_velocity().raw())
         .unwrap_or([0, 0]);
-    let [nx, ny] = contact.normal.raw();
-    round_shift(
-        (bvx as i128 - avx as i128) * nx as i128 + (bvy as i128 - avy as i128) * ny as i128,
-        30,
-    ) as i64
+    contact
+        .normal
+        .dot_wide_raw([bvx as i64 - avx as i64, bvy as i64 - avy as i64])
 }
 
 fn add_velocity(body: &mut Body, dx: i128, dy: i128) -> Result<(), StepError> {

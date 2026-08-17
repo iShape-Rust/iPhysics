@@ -34,6 +34,43 @@ impl UnitVector {
         })
     }
 
+    /// Projects a bounded raw vector onto this direction, preserving the
+    /// vector's fixed-point scale.
+    #[inline(always)]
+    pub const fn dot_raw(self, vector: DiffVec2) -> i64 {
+        round_shift_i64(
+            vector.dot(DiffVec2::from_raw(self.x, self.y)),
+            Self::FRACTION_BITS,
+        )
+    }
+
+    /// Scales this direction by a bounded raw magnitude.
+    #[inline(always)]
+    pub const fn scaled_raw(self, magnitude: i32) -> DiffVec2 {
+        DiffVec2::from_wide_clamped(
+            round_shift_i64(self.x as i64 * magnitude as i64, Self::FRACTION_BITS),
+            round_shift_i64(self.y as i64 * magnitude as i64, Self::FRACTION_BITS),
+        )
+    }
+
+    /// Solver variant for values whose intermediate range requires i128.
+    #[inline(always)]
+    pub(crate) const fn scaled_wide_raw(self, magnitude: i128) -> [i128; 2] {
+        [
+            round_shift_i128(self.x as i128 * magnitude, Self::FRACTION_BITS),
+            round_shift_i128(self.y as i128 * magnitude, Self::FRACTION_BITS),
+        ]
+    }
+
+    /// Solver projection for differences that do not satisfy DiffVec2 bounds.
+    #[inline(always)]
+    pub(crate) const fn dot_wide_raw(self, vector: [i64; 2]) -> i64 {
+        round_shift_i128(
+            vector[0] as i128 * self.x as i128 + vector[1] as i128 * self.y as i128,
+            Self::FRACTION_BITS,
+        ) as i64
+    }
+
     #[inline(always)]
     pub(crate) const fn from_raw(x: i32, y: i32) -> Self {
         Self { x, y }
@@ -42,6 +79,26 @@ impl UnitVector {
     #[inline(always)]
     pub const fn raw(self) -> [i32; 2] {
         [self.x, self.y]
+    }
+}
+
+#[inline(always)]
+const fn round_shift_i64(value: i64, shift: u32) -> i64 {
+    let half = 1_i64 << (shift - 1);
+    if value < 0 {
+        -((-value + half) >> shift)
+    } else {
+        (value + half) >> shift
+    }
+}
+
+#[inline(always)]
+const fn round_shift_i128(value: i128, shift: u32) -> i128 {
+    let half = 1_i128 << (shift - 1);
+    if value < 0 {
+        -((-value + half) >> shift)
+    } else {
+        (value + half) >> shift
     }
 }
 
@@ -54,6 +111,8 @@ mod tests {
         let direction = UnitVector::normalized(DiffVec2::from_raw(3, 4)).unwrap();
 
         assert_eq!(direction.raw(), [644_245_094, 858_993_459]);
+        assert_eq!(direction.scaled_raw(10).raw(), [6, 8]);
+        assert_eq!(direction.dot_raw(DiffVec2::from_raw(3, 4)), 5);
         assert!(UnitVector::normalized(DiffVec2::ZERO).is_none());
     }
 }
