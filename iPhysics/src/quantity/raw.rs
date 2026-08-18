@@ -203,18 +203,6 @@ pub(super) fn quantize_u32_f64(value: f64, fraction_bits: u32) -> Option<u32> {
     }
 }
 
-/// Rounds to the nearest integer; midpoint values are rounded away from zero.
-#[inline(always)]
-pub(super) const fn shift_round(value: i64, shift: u32) -> i64 {
-    debug_assert!(shift > 0);
-    let half = 1_i64 << (shift - 1);
-    if value < 0 {
-        -((-value + half) >> shift)
-    } else {
-        (value + half) >> shift
-    }
-}
-
 #[cfg(test)]
 mod diff_tests {
     use super::*;

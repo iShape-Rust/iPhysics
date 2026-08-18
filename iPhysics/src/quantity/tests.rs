@@ -1,4 +1,5 @@
-use super::raw::shift_round;
+use crate::fix::shift::RoundShift;
+
 use super::{
     Angle, AngleDelta, AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity,
     Position, integrate, integrate_angular,
@@ -50,8 +51,8 @@ fn rounds_small_motion_symmetrically() {
 
     assert_eq!(Position::ZERO.advance(positive).raw()[0], 1);
     assert_eq!(Position::ZERO.advance(negative).raw()[0], -1);
-    assert_eq!(shift_round(8, 4), 1);
-    assert_eq!(shift_round(-8, 4), -1);
+    assert_eq!(8_i64.round_shift(4), 1);
+    assert_eq!((-8_i64).round_shift(4), -1);
 }
 
 #[test]
@@ -103,8 +104,33 @@ fn angular_velocity_conversion_is_symmetric() {
         positive.angle_delta_per_tick().raw(),
         -negative.angle_delta_per_tick().raw()
     );
-    assert!(AngularVelocity::from_radians_per_second(100.1).is_none());
-    assert!(AngularAcceleration::from_radians_per_second_squared(-100.1).is_none());
+}
+
+#[test]
+fn angular_acceleration_uses_full_q24_range() {
+    assert_eq!(AngularAcceleration::from_raw(i32::MIN).raw(), i32::MIN);
+    assert_eq!(AngularAcceleration::from_raw(i32::MAX).raw(), i32::MAX);
+    assert!(AngularAcceleration::from_radians_per_second_squared(-128.0).is_some());
+    assert!(AngularAcceleration::from_radians_per_second_squared(128.0).is_none());
+}
+
+#[test]
+fn angular_velocity_uses_full_q24_range() {
+    let min = AngularVelocity::from_raw(i32::MIN);
+    let max = AngularVelocity::from_raw(i32::MAX);
+
+    assert_eq!(min.raw(), i32::MIN);
+    assert_eq!(max.raw(), i32::MAX);
+    assert!(AngularVelocity::from_radians_per_second(-128.0).is_some());
+    assert!(AngularVelocity::from_radians_per_second(128.0).is_none());
+    assert_eq!(
+        min.advance(AngularAcceleration::from_raw(i32::MIN)).raw(),
+        i32::MIN
+    );
+    assert_eq!(
+        max.advance(AngularAcceleration::from_raw(i32::MAX)).raw(),
+        i32::MAX
+    );
 }
 
 #[test]
