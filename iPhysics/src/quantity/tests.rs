@@ -17,9 +17,19 @@ fn expected_values_fit_the_formats() {
 }
 
 #[test]
-fn q24_rejects_values_outside_its_range() {
-    assert!(LinearVelocity::from_meters_per_second(100.1, 0.0).is_none());
-    assert!(LinearAcceleration::from_meters_per_second_squared(-100.1, 0.0).is_none());
+fn linear_quantities_use_full_q24_range() {
+    assert_eq!(
+        LinearVelocity::from_raw(i32::MIN, i32::MAX).raw(),
+        [i32::MIN, i32::MAX]
+    );
+    assert_eq!(
+        LinearAcceleration::from_raw(i32::MIN, i32::MAX).raw(),
+        [i32::MIN, i32::MAX]
+    );
+    assert!(LinearVelocity::from_meters_per_second(-128.0, 0.0).is_some());
+    assert!(LinearVelocity::from_meters_per_second(128.0, 0.0).is_none());
+    assert!(LinearAcceleration::from_meters_per_second_squared(-128.0, 0.0).is_some());
+    assert!(LinearAcceleration::from_meters_per_second_squared(128.0, 0.0).is_none());
     assert!(LinearVelocity::from_meters_per_second(f64::NAN, 0.0).is_none());
 }
 
@@ -134,12 +144,13 @@ fn angular_velocity_uses_full_q24_range() {
 }
 
 #[test]
-fn velocity_integration_saturates_at_gameplay_limit() {
-    let velocity = LinearVelocity::from_meters_per_second(100.0, -100.0).unwrap();
-    let acceleration = LinearAcceleration::from_meters_per_second_squared(100.0, -100.0).unwrap();
+fn velocity_integration_saturates_at_storage_limit() {
+    let velocity = LinearVelocity::from_raw(i32::MAX, i32::MIN);
+    let acceleration = LinearAcceleration::from_raw(i32::MAX, i32::MIN);
 
+    assert_eq!(velocity.advance(acceleration).raw(), [i32::MAX, i32::MIN]);
     assert_eq!(
-        velocity.advance(acceleration).raw(),
-        [LinearVelocity::MAX_RAW, LinearVelocity::MIN_RAW]
+        LinearVelocity::from_raw(i32::MIN, i32::MIN).raw_sqr_magnitude(),
+        1_u64 << 63
     );
 }

@@ -20,8 +20,8 @@ inclusive unless an upper bound is explicitly marked as exclusive.
 | Body position [`Position`](iPhysics/src/quantity/position.rs) | 2 × `i32`, Q16 | `2^-16 m` = `0.0000152588 m` (about `0.0153 mm`) | `-16,384 m` to `16,384 m` exclusive per axis | A world is about `32.768 km` wide. The `[-2^30, 2^30)` raw bound guarantees that `Position - Position` fits in an `i32` `DiffVec2`, while its dot and cross products fit in `i64`. |
 | Derived world point [`GeometryPoint`](iPhysics/src/geometry/point.rs) | 2 × `i32`, Q16 | `2^-16 m` | `-32,768 m` to `32,768 m` exclusive per axis | Collider vertices, contact points, and AABB bounds may extend beyond body-center limits. The full `i32` range avoids clipping derived geometry. |
 | Non-negative length [`Length`](iPhysics/src/quantity/length.rs) | `u32`, Q16 | `2^-16 m` | `0` to `65,536 m` exclusive | Uses the same scale as positions, so distances and radii require no scale conversion. A circle radius and a convex vertex radius are additionally limited to `16,384 m` exclusive. |
-| Linear velocity [`LinearVelocity`](iPhysics/src/quantity/linear_velocity.rs) | 2 × `i32`, Q24 | `2^-24 m/s` = `5.96046e-8 m/s` | `-100` to `100 m/s` per component | Q24 provides fine accumulation while leaving headroom below the underlying `i32` Q24 capacity of `[-128, 128) m/s`. The clamp is a gameplay limit and protects solver intermediates. |
-| Linear acceleration [`LinearAcceleration`](iPhysics/src/quantity/linear_acceleration.rs) | 2 × `i32`, Q24 | `2^-24 m/s²` = `5.96046e-8 m/s²` | `-100` to `100 m/s²` per component | Covers gravity, impacts, and short gameplay impulses with the same conversion path as velocity. |
+| Linear velocity [`LinearVelocity`](iPhysics/src/quantity/linear_velocity.rs) | 2 × `i32`, Q24 | `2^-24 m/s` = `5.96046e-8 m/s` | `-128` inclusive to `128 m/s` exclusive per component | Uses the full underlying `i32` Q24 range; integration and solver operations use widened intermediates. |
+| Linear acceleration [`LinearAcceleration`](iPhysics/src/quantity/linear_acceleration.rs) | 2 × `i32`, Q24 | `2^-24 m/s²` = `5.96046e-8 m/s²` | `-128` inclusive to `128 m/s²` exclusive per component | Uses the full underlying `i32` Q24 range; acceleration-to-velocity integration widens intermediates to `i64`. |
 | Orientation [`Angle`](iPhysics/src/quantity/angle.rs) | `u32` binary angle | `2π / 2^32` = `1.46292e-9 rad` (about `8.38e-8°`) | One complete turn, wrapping | Overflow performs exact angle normalization. Quarter, half, and full turns are exact powers of two. Deterministic sine/cosine uses non-expanding integer Q30 CORDIC. |
 | Signed angle difference `AngleDelta` | `i32` binary angle | Same as `Angle` | `-π` to `π` exclusive | A subtraction interpreted as `i32` directly yields the shortest wrapped angular difference. |
 | Angular velocity [`AngularVelocity`](iPhysics/src/quantity/angular_velocity.rs) | `i32`, Q24 | `2^-24 rad/s` = `5.96046e-8 rad/s` | `-128` inclusive to `128 rad/s` exclusive | Uses the full underlying `i32` Q24 range; conversion to binary angle units and integration use widened intermediates. |
@@ -30,11 +30,11 @@ inclusive unless an upper bound is explicitly marked as exclusive.
 | Restitution [`Material`](iPhysics/src/body/material.rs) | `u32`, Q16 | `2^-16` = `0.0000152588` | `0` to `1` | Dimensionless collision elasticity; values outside the physical gameplay interval are rejected. |
 | Simulation time | fixed tick, no stored scalar | `1 / 64 s` = `0.015625 s` | Integer number of ticks | `64` is a power of two, so acceleration-to-velocity and velocity-to-position integration use deterministic shifts rather than division. |
 
-Ranges for vector quantities are currently enforced **per component**. Thus a
-velocity of `(100, 100) m/s` is valid even though its magnitude is about
-`141.4 m/s`. If the design requires a strict magnitude limit, it should be a
-separate invariant rather than an undocumented side effect of component
-clamping.
+Ranges for vector quantities are specified **per component**. Thus the largest
+representable velocity magnitude is approximately `181.019 m/s` near the
+corners of the component range. If the design requires a smaller strict
+magnitude limit, it should be a separate gameplay invariant rather than an
+undocumented side effect of component clamping.
 
 ### Effective precision during integration
 

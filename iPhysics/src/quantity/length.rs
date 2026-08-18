@@ -12,7 +12,6 @@ impl Length {
     pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
     pub const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
     pub const ZERO: Self = Self(0);
-
     #[inline(always)]
     pub const fn from_raw(raw: u32) -> Self {
         Self(raw)

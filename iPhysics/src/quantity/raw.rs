@@ -1,4 +1,4 @@
-use crate::fix::shift::RoundShift;
+use crate::fix::{clamp::ClampToI32, shift::RoundShift};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(super) struct RawVec2 {
@@ -16,21 +16,19 @@ impl RawVec2 {
 
     /// Saturates a wide pair to a quantity-specific inclusive raw range.
     #[inline(always)]
-    pub(super) const fn from_wide_saturated(x: i128, y: i128, min: i32, max: i32) -> Self {
-        debug_assert!(min <= max);
+    pub(super) fn from_wide_saturated(x: i128, y: i128, min: i32, max: i32) -> Self {
         Self {
-            x: clamp_i128_to_i32(x, min, max),
-            y: clamp_i128_to_i32(y, min, max),
+            x: x.clamp_to_i32(min, max),
+            y: y.clamp_to_i32(min, max),
         }
     }
 
     /// Saturates an i64 pair without widening the common integration path.
     #[inline(always)]
-    pub(super) const fn from_i64_saturated(x: i64, y: i64, min: i32, max: i32) -> Self {
-        debug_assert!(min <= max);
+    pub(super) fn from_i64_saturated(x: i64, y: i64, min: i32, max: i32) -> Self {
         Self {
-            x: clamp_i64_to_i32(x, min, max),
-            y: clamp_i64_to_i32(y, min, max),
+            x: x.clamp_to_i32(min, max),
+            y: y.clamp_to_i32(min, max),
         }
     }
 
@@ -126,28 +124,6 @@ const fn clamp_diff_component(value: i64) -> i32 {
         -i32::MAX
     } else if value > i32::MAX as i64 {
         i32::MAX
-    } else {
-        value as i32
-    }
-}
-
-#[inline(always)]
-pub(super) const fn clamp_i64_to_i32(value: i64, min: i32, max: i32) -> i32 {
-    if value < min as i64 {
-        min
-    } else if value > max as i64 {
-        max
-    } else {
-        value as i32
-    }
-}
-
-#[inline(always)]
-pub(super) const fn clamp_i128_to_i32(value: i128, min: i32, max: i32) -> i32 {
-    if value < min as i128 {
-        min
-    } else if value > max as i128 {
-        max
     } else {
         value as i32
     }

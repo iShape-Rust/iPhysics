@@ -35,7 +35,7 @@ impl Position {
     /// Creates a position from a wide simulation result, saturating at the
     /// representable world boundary instead of wrapping or failing the tick.
     #[inline(always)]
-    pub(crate) const fn from_wide_saturated(x: i128, y: i128) -> Self {
+    pub(crate) fn from_wide_saturated(x: i128, y: i128) -> Self {
         Self(RawVec2::from_wide_saturated(
             x,
             y,
@@ -45,7 +45,7 @@ impl Position {
     }
 
     #[inline(always)]
-    pub(crate) const fn from_i64_saturated(x: i64, y: i64) -> Self {
+    pub(crate) fn from_i64_saturated(x: i64, y: i64) -> Self {
         Self(RawVec2::from_i64_saturated(
             x,
             y,

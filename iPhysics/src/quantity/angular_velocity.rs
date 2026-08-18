@@ -1,8 +1,8 @@
-use crate::fix::shift::RoundShift;
+use crate::fix::{clamp::ClampToI32, shift::RoundShift};
 
 use super::angle::AngleDelta;
 use super::angular_acceleration::AngularAcceleration;
-use super::raw::{clamp_i64_to_i32, quantize_f64};
+use super::raw::quantize_f64;
 use super::{ACCELERATION_TO_VELOCITY_SHIFT, KINEMATIC_FRACTION_BITS};
 
 // At 64 Hz, Q24 rad/s converts to binary-angle units per tick by multiplying
@@ -27,8 +27,8 @@ impl AngularVelocity {
     }
 
     #[inline(always)]
-    const fn from_i64_saturated(raw: i64) -> Self {
-        Self(clamp_i64_to_i32(raw, i32::MIN, i32::MAX))
+    fn from_i64_saturated(raw: i64) -> Self {
+        Self(raw.clamp_to_i32(i32::MIN, i32::MAX))
     }
 
     /// Converts radians per second to Q24, rounding midpoint values away from zero.
