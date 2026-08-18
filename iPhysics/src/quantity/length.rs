@@ -1,5 +1,6 @@
+use crate::fix::quantize::Quantize;
+
 use super::POSITION_FRACTION_BITS;
-use super::raw::quantize_u32_f64;
 
 /// Non-negative length in metres, stored as unsigned Q16.
 ///
@@ -19,7 +20,7 @@ impl Length {
 
     #[inline]
     pub fn from_meters(value: f64) -> Option<Self> {
-        Some(Self(quantize_u32_f64(value, Self::FRACTION_BITS)?))
+        Some(Self(value.quantize(Self::FRACTION_BITS)?))
     }
 
     #[inline(always)]

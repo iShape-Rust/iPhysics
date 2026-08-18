@@ -1,4 +1,4 @@
-use super::raw::quantize_u32_f64;
+use crate::fix::quantize::Quantize;
 
 /// Positive body mass in kilograms, stored as unsigned Q14.
 ///
@@ -19,7 +19,7 @@ impl Mass {
 
     #[inline]
     pub fn from_kilograms(value: f64) -> Option<Self> {
-        Self::from_raw(quantize_u32_f64(value, Self::FRACTION_BITS)?)
+        Self::from_raw(value.quantize(Self::FRACTION_BITS)?)
     }
 
     #[inline(always)]

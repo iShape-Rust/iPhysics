@@ -1,6 +1,6 @@
 use crate::Angle;
 use crate::fix::shift::RoundShift;
-use crate::quantity::DiffVec2;
+use crate::quantity::RawVec2;
 
 /// Dimensionless normalized direction stored as signed Q30 components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,14 +16,14 @@ impl UnitVector {
 
     /// Normalizes a non-zero raw vector into a deterministic Q30 direction.
     #[inline]
-    pub fn normalized(vector: DiffVec2) -> Option<Self> {
+    pub fn normalized(vector: RawVec2) -> Option<Self> {
         Self::normalized_with_length(vector, vector.squared_magnitude().isqrt())
     }
 
     /// Normalizes using a magnitude already computed by the caller.
     /// Circle collision uses this after its exact squared-distance test.
     #[inline]
-    pub(crate) fn normalized_with_length(vector: DiffVec2, length: u64) -> Option<Self> {
+    pub(crate) fn normalized_with_length(vector: RawVec2, length: u64) -> Option<Self> {
         if length == 0 {
             return None;
         }
@@ -57,17 +57,17 @@ impl UnitVector {
     /// Projects a bounded raw vector onto this direction, preserving the
     /// vector's fixed-point scale.
     #[inline(always)]
-    pub const fn dot_raw(self, vector: DiffVec2) -> i64 {
+    pub const fn dot_raw(self, vector: RawVec2) -> i64 {
         round_shift_i64(
-            vector.dot(DiffVec2::from_raw_unchecked(self.x, self.y)),
+            vector.dot(RawVec2::from_raw_unchecked(self.x, self.y)),
             Self::FRACTION_BITS,
         )
     }
 
     /// Scales this direction by a bounded raw magnitude.
     #[inline(always)]
-    pub const fn scaled_raw(self, magnitude: i32) -> DiffVec2 {
-        DiffVec2::from_wide_clamped(
+    pub fn scaled_raw(self, magnitude: i32) -> RawVec2 {
+        RawVec2::from_wide_clamped(
             round_shift_i64(self.x as i64 * magnitude as i64, Self::FRACTION_BITS),
             round_shift_i64(self.y as i64 * magnitude as i64, Self::FRACTION_BITS),
         )
@@ -82,7 +82,7 @@ impl UnitVector {
         ]
     }
 
-    /// Solver projection for differences that do not satisfy DiffVec2 bounds.
+    /// Solver projection for differences that do not satisfy RawVec2 bounds.
     #[inline(always)]
     pub(crate) const fn dot_wide_raw(self, vector: [i64; 2]) -> i64 {
         round_shift_i128(
@@ -150,11 +150,11 @@ mod tests {
 
     #[test]
     fn normalizes_raw_vector_to_q30() {
-        let direction = UnitVector::normalized(DiffVec2::from_raw(3, 4)).unwrap();
+        let direction = UnitVector::normalized(RawVec2::from_raw(3, 4)).unwrap();
 
         assert_eq!(direction.raw(), [644_245_094, 858_993_459]);
         assert_eq!(direction.scaled_raw(10).raw(), [6, 8]);
-        assert_eq!(direction.dot_raw(DiffVec2::from_raw(3, 4)), 5);
-        assert!(UnitVector::normalized(DiffVec2::ZERO).is_none());
+        assert_eq!(direction.dot_raw(RawVec2::from_raw(3, 4)), 5);
+        assert!(UnitVector::normalized(RawVec2::ZERO).is_none());
     }
 }

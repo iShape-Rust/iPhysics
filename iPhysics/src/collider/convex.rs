@@ -1,5 +1,5 @@
 use crate::geometry::{Aabb, GeometryPoint, UnitVector};
-use crate::quantity::{DiffVec2, Position};
+use crate::quantity::{Position, RawVec2};
 use crate::transform::Transform;
 
 pub const MAX_CONVEX_VERTICES: usize = 6;
@@ -116,7 +116,7 @@ impl Convex {
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
-            normals[i] = UnitVector::normalized(DiffVec2::from_raw_unchecked(edge_y, -edge_x))
+            normals[i] = UnitVector::normalized(RawVec2::from_raw_unchecked(edge_y, -edge_x))
                 .ok_or(ConvexError::CollinearEdge)?;
         }
 

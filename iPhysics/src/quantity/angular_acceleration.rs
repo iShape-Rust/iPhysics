@@ -1,5 +1,6 @@
+use crate::fix::quantize::Quantize;
+
 use super::KINEMATIC_FRACTION_BITS;
-use super::raw::quantize_f64;
 
 /// Angular acceleration in radians per second squared, stored as signed Q24.
 ///
@@ -21,7 +22,7 @@ impl AngularAcceleration {
     /// Converts radians per second squared to Q24, rounding midpoint values away from zero.
     #[inline]
     pub fn from_radians_per_second_squared(value: f64) -> Option<Self> {
-        Some(Self(quantize_f64(value, Self::FRACTION_BITS)?))
+        Some(Self(value.quantize(Self::FRACTION_BITS)?))
     }
 
     #[inline(always)]
