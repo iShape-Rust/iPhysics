@@ -1,6 +1,6 @@
 use crate::geometry::{Aabb, GeometryPoint, UnitVector};
 use crate::quantity::{DiffVec2, Position};
-use crate::transform::{Transform, rotate_fixed};
+use crate::transform::Transform;
 
 pub const MAX_CONVEX_VERTICES: usize = 6;
 
@@ -191,8 +191,7 @@ impl Convex {
     }
 
     pub(crate) fn transformed_normal(self, index: usize, transform: Transform) -> UnitVector {
-        let raw = rotate_fixed(self.normals[index].raw(), transform.angle);
-        UnitVector::from_raw(raw[0], raw[1])
+        self.normals[index].rotate(transform.angle)
     }
 
     #[inline(always)]

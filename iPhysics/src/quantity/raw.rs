@@ -1,3 +1,5 @@
+use crate::fix::shift::RoundShift;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(super) struct RawVec2 {
     x: i32,
@@ -52,15 +54,9 @@ impl RawVec2 {
     }
 
     #[inline]
-    pub(super) const fn add_shifted_saturated(
-        self,
-        rhs: Self,
-        shift: u32,
-        min: i32,
-        max: i32,
-    ) -> Self {
-        let x = self.x as i64 + shift_round(rhs.x as i64, shift);
-        let y = self.y as i64 + shift_round(rhs.y as i64, shift);
+    pub(super) fn add_shifted_saturated(self, rhs: Self, shift: u32, min: i32, max: i32) -> Self {
+        let x = self.x as i64 + (rhs.x as i64).round_shift(shift);
+        let y = self.y as i64 + (rhs.y as i64).round_shift(shift);
         Self::from_i64_saturated(x, y, min, max)
     }
 }

@@ -1,3 +1,5 @@
+use crate::Angle;
+use crate::fix::shift::RoundShift;
 use crate::quantity::DiffVec2;
 
 /// Dimensionless normalized direction stored as signed Q30 components.
@@ -97,6 +99,16 @@ impl UnitVector {
     #[inline(always)]
     pub const fn raw(self) -> [i32; 2] {
         [self.x, self.y]
+    }
+
+    pub(crate) fn rotate(self, angle: Angle) -> Self {
+        let [sin, cos] = angle.sin_cos_q30();
+        let [px, py] = self.raw();
+
+        let x = (px as i64 * cos as i64 - py as i64 * sin as i64).round_shift(30);
+        let y = (px as i64 * sin as i64 + py as i64 * cos as i64).round_shift(30);
+
+        Self::from_raw(x as i32, y as i32)
     }
 }
 

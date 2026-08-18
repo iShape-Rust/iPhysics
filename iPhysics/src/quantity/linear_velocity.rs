@@ -77,7 +77,7 @@ impl LinearVelocity {
     /// Applies an acceleration for one 64 Hz tick and saturates each component
     /// at the enforced gameplay range.
     #[inline]
-    pub const fn advance(self, acceleration: LinearAcceleration) -> Self {
+    pub fn advance(self, acceleration: LinearAcceleration) -> Self {
         Self(self.0.add_shifted_saturated(
             acceleration.raw_vec(),
             ACCELERATION_TO_VELOCITY_SHIFT,

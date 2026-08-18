@@ -1,6 +1,8 @@
 use super::linear_velocity::LinearVelocity;
 use super::raw::{DiffVec2, RawVec2};
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
+use crate::fix::shift::RoundShift;
+use crate::{Angle, GeometryPoint};
 use i_float::int::point::IntPoint;
 
 /// World-space position in metres, stored as signed Q16 components.
@@ -35,6 +37,16 @@ impl Position {
     #[inline(always)]
     pub(crate) const fn from_wide_saturated(x: i128, y: i128) -> Self {
         Self(RawVec2::from_wide_saturated(
+            x,
+            y,
+            Self::MIN_RAW,
+            Self::MAX_RAW,
+        ))
+    }
+
+    #[inline(always)]
+    pub(crate) const fn from_i64_saturated(x: i64, y: i64) -> Self {
+        Self(RawVec2::from_i64_saturated(
             x,
             y,
             Self::MIN_RAW,
@@ -87,7 +99,7 @@ impl Position {
 
     /// Advances the position by one 64 Hz tick using semi-implicit velocity.
     #[inline]
-    pub const fn advance(self, velocity: LinearVelocity) -> Self {
+    pub fn advance(self, velocity: LinearVelocity) -> Self {
         Self(self.0.add_shifted_saturated(
             velocity.raw_vec(),
             VELOCITY_TO_POSITION_SHIFT,
@@ -113,6 +125,32 @@ impl Position {
     #[inline(always)]
     pub fn squared_distance(self, other: Self) -> u64 {
         (self - other).squared_magnitude()
+    }
+
+    #[inline(always)]
+    pub(crate) fn saturating_add(self, point: GeometryPoint) -> Self {
+        let [ax, ay] = self.raw();
+        let [bx, by] = point.raw();
+
+        Self::from_i64_saturated(ax as i64 + bx as i64, ay as i64 + by as i64)
+    }
+
+    #[inline(always)]
+    pub(crate) fn uncheck_add(self, point: GeometryPoint) -> GeometryPoint {
+        let [ax, ay] = self.raw();
+        let [bx, by] = point.raw();
+
+        GeometryPoint::from_raw(ax + bx, ay + by)
+    }
+
+    pub(crate) fn rotate(self, angle: Angle) -> GeometryPoint {
+        let [sin, cos] = angle.sin_cos_q30();
+        let [px, py] = self.raw();
+
+        let x = (px as i64 * cos as i64 - py as i64 * sin as i64).round_shift(30);
+        let y = (px as i64 * sin as i64 + py as i64 * cos as i64).round_shift(30);
+
+        GeometryPoint::from_raw(x as i32, y as i32)
     }
 }
 

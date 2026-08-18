@@ -31,9 +31,7 @@ impl Transform {
     /// arbitrary local point has no collider-radius invariant.
     #[inline]
     pub fn apply(self, local: Position) -> Position {
-        let [rx, ry] = rotate_fixed(local.raw(), self.angle);
-        let [tx, ty] = self.position.raw();
-        Position::from_wide_saturated(tx as i128 + rx as i128, ty as i128 + ry as i128)
+        self.position.saturating_add(local.rotate(self.angle))
     }
 
     /// Transforms a collider-local point into the full-i32 geometry domain.
@@ -41,9 +39,7 @@ impl Transform {
     /// rotated point plus any valid body position fits without saturation.
     #[inline]
     pub(crate) fn apply_geometry(self, local: Position) -> GeometryPoint {
-        let [rx, ry] = rotate_fixed(local.raw(), self.angle);
-        let [tx, ty] = self.position.raw();
-        GeometryPoint::from_wide_narrow(tx as i64 + rx as i64, ty as i64 + ry as i64)
+        self.position.uncheck_add(local.rotate(self.angle))
     }
 
     /// Composes a child-local transform with this parent transform.
@@ -51,7 +47,7 @@ impl Transform {
     pub fn compose(self, local: Self) -> Self {
         Self {
             position: self.apply(local.position),
-            angle: Angle::from_raw(self.angle.raw().wrapping_add(local.angle.raw())),
+            angle: self.angle + local.angle,
         }
     }
 
@@ -66,32 +62,6 @@ impl Transform {
             position: self.position.advance(linear_velocity),
             angle: self.angle.advance(angular_velocity),
         }
-    }
-}
-
-#[inline]
-pub(crate) fn rotate_fixed(point: [i32; 2], angle: Angle) -> [i32; 2] {
-    let [sin, cos] = angle.sin_cos_q30();
-    let x = round_shift(
-        point[0] as i64 * cos as i64 - point[1] as i64 * sin as i64,
-        30,
-    );
-    let y = round_shift(
-        point[0] as i64 * sin as i64 + point[1] as i64 * cos as i64,
-        30,
-    );
-    debug_assert!(x >= i32::MIN as i64 && x <= i32::MAX as i64);
-    debug_assert!(y >= i32::MIN as i64 && y <= i32::MAX as i64);
-    [x as i32, y as i32]
-}
-
-#[inline(always)]
-fn round_shift(value: i64, shift: u32) -> i64 {
-    let half = 1_i64 << (shift - 1);
-    if value < 0 {
-        -((-value + half) >> shift)
-    } else {
-        (value + half) >> shift
     }
 }
 

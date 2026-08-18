@@ -166,6 +166,15 @@ impl Angle {
     }
 }
 
+impl core::ops::Add for Angle {
+    type Output = Angle;
+
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self::Output {
+        Angle::from_raw(self.raw().wrapping_add(rhs.raw()))
+    }
+}
+
 /// Signed binary angle difference in the range of one half-turn.
 ///
 /// The raw range maps to `[-π, π)`, with the same approximately `1.46e-9 rad`
