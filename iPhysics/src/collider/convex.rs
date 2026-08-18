@@ -31,74 +31,34 @@ pub struct Convex {
 impl Convex {
     pub const MAX_VERTICES: usize = MAX_CONVEX_VERTICES;
 
+    #[inline(always)]
     pub fn new(vertices: &[Position]) -> Result<Self, ConvexError> {
-        if vertices.len() < 3 {
-            return Err(ConvexError::TooFewVertices);
-        }
-        if vertices.len() > MAX_CONVEX_VERTICES {
-            return Err(ConvexError::TooManyVertices);
-        }
+        let winding = validate_vertices(vertices)?;
+        Ok(Self::from_valid_vertices(vertices, winding))
+    }
 
+    /// Builds a convex from vertices known to satisfy the same invariants as
+    /// [`Self::new`]. The preconditions are verified in debug builds only.
+    ///
+    /// The vertices may use either winding and any cyclic starting point; the
+    /// result is still canonicalized before its center and normals are built.
+    #[inline(always)]
+    pub fn new_unchecked(vertices: &[Position]) -> Self {
+        debug_assert!(
+            validate_vertices(vertices).is_ok(),
+            "Convex::new_unchecked requires a valid strict convex"
+        );
+        Self::from_valid_vertices(vertices, winding_unchecked(vertices))
+    }
+
+    #[inline(always)]
+    fn from_valid_vertices(vertices: &[Position], winding: i8) -> Self {
         let count = vertices.len();
         let mut storage = [Position::ZERO; MAX_CONVEX_VERTICES];
         storage[..count].copy_from_slice(vertices);
 
-        let max_radius = Position::MAX_RAW as u64;
-        let max_squared_radius = max_radius * max_radius;
-        if storage[..count]
-            .iter()
-            .any(|vertex| vertex.squared_distance(Position::ZERO) > max_squared_radius)
-        {
-            return Err(ConvexError::VertexOutsideLimit);
-        }
-
-        for i in 0..count {
-            for j in i + 1..count {
-                if storage[i] == storage[j] {
-                    return Err(ConvexError::DuplicateVertex);
-                }
-            }
-        }
-
-        let mut winding = 0_i8;
-        for i in 0..count {
-            let cross = corner_cross(
-                storage[i],
-                storage[(i + 1) % count],
-                storage[(i + 2) % count],
-            );
-            if cross == 0 {
-                return Err(ConvexError::CollinearEdge);
-            }
-            let sign = if cross > 0 { 1 } else { -1 };
-            if winding == 0 {
-                winding = sign;
-            } else if winding != sign {
-                return Err(ConvexError::NotConvex);
-            }
-        }
-
         if winding < 0 {
             storage[..count].reverse();
-        }
-
-        // A consistent turn at adjacent corners is not sufficient for an
-        // arbitrary input order (a self-intersecting star can satisfy it).
-        // Every remaining vertex must be strictly inside every CCW edge.
-        for edge in 0..count {
-            let next = (edge + 1) % count;
-            for vertex in 0..count {
-                if vertex == edge || vertex == next {
-                    continue;
-                }
-                let side = edge_cross(storage[edge], storage[next], storage[vertex]);
-                if side == 0 {
-                    return Err(ConvexError::CollinearEdge);
-                }
-                if side < 0 {
-                    return Err(ConvexError::NotConvex);
-                }
-            }
         }
 
         // Canonical start makes cyclic permutations and opposite winding
@@ -117,15 +77,15 @@ impl Convex {
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
             normals[i] = UnitVector::normalized(RawVec2::from_raw_unchecked(edge_y, -edge_x))
-                .ok_or(ConvexError::CollinearEdge)?;
+                .expect("validated convex edges are non-zero");
         }
 
-        Ok(Self {
+        Self {
             vertices: storage,
             normals,
             center,
             count: count as u8,
-        })
+        }
     }
 
     #[inline(always)]
@@ -214,12 +174,76 @@ impl core::ops::Deref for TransformedVertices {
     }
 }
 
-fn corner_cross(a: Position, b: Position, c: Position) -> i64 {
-    (b - a).cross(c - b)
+#[inline(always)]
+fn validate_vertices(vertices: &[Position]) -> Result<i8, ConvexError> {
+    if vertices.len() < 3 {
+        return Err(ConvexError::TooFewVertices);
+    }
+    if vertices.len() > MAX_CONVEX_VERTICES {
+        return Err(ConvexError::TooManyVertices);
+    }
+
+    let max_radius = Position::MAX_RAW as u64;
+    let max_squared_radius = max_radius * max_radius;
+    if vertices
+        .iter()
+        .any(|vertex| vertex.squared_distance(Position::ZERO) > max_squared_radius)
+    {
+        return Err(ConvexError::VertexOutsideLimit);
+    }
+
+    for i in 0..vertices.len() {
+        for j in i + 1..vertices.len() {
+            if vertices[i] == vertices[j] {
+                return Err(ConvexError::DuplicateVertex);
+            }
+        }
+    }
+
+    let mut winding = 0_i8;
+    for i in 0..vertices.len() {
+        let a = vertices[i];
+        let b = vertices[(i + 1) % vertices.len()];
+        let c = vertices[(i + 2) % vertices.len()];
+        let cross = (b - a).cross(c - b);
+        if cross == 0 {
+            return Err(ConvexError::CollinearEdge);
+        }
+        let sign = if cross > 0 { 1 } else { -1 };
+        if winding == 0 {
+            winding = sign;
+        } else if winding != sign {
+            return Err(ConvexError::NotConvex);
+        }
+    }
+
+    // A consistent turn at adjacent corners is not sufficient for an
+    // arbitrary input order (a self-intersecting star can satisfy it).
+    // Every remaining vertex must be strictly inside every oriented edge.
+    for edge in 0..vertices.len() {
+        let next = (edge + 1) % vertices.len();
+        for vertex in 0..vertices.len() {
+            if vertex == edge || vertex == next {
+                continue;
+            }
+            let a = vertices[edge];
+            let side = (vertices[next] - a).cross(vertices[vertex] - a);
+            if side == 0 {
+                return Err(ConvexError::CollinearEdge);
+            }
+            if (side > 0) != (winding > 0) {
+                return Err(ConvexError::NotConvex);
+            }
+        }
+    }
+
+    Ok(winding)
 }
 
-fn edge_cross(a: Position, b: Position, point: Position) -> i64 {
-    (b - a).cross(point - a)
+#[inline(always)]
+fn winding_unchecked(vertices: &[Position]) -> i8 {
+    let cross = (vertices[1] - vertices[0]).cross(vertices[2] - vertices[1]);
+    if cross < 0 { -1 } else { 1 }
 }
 
 /// Computes the uniform-density center of mass in one traversal. Vertices are
@@ -297,21 +321,32 @@ mod tests {
 
     #[test]
     fn canonicalizes_clockwise_vertices() {
-        let convex = Convex::new(&[
+        let vertices = [
             Position::from_raw(-10, -10),
             Position::from_raw(-10, 10),
             Position::from_raw(10, 10),
             Position::from_raw(10, -10),
-        ])
-        .unwrap();
+        ];
+        let convex = Convex::new(&vertices).unwrap();
 
-        assert!(
-            corner_cross(
-                convex.vertices()[0],
-                convex.vertices()[1],
-                convex.vertices()[2]
-            ) > 0
-        );
+        let [a, b, c, ..] = convex.vertices() else {
+            unreachable!()
+        };
+        assert!((*b - *a).cross(*c - *b) > 0);
+        assert_eq!(Convex::new_unchecked(&vertices), convex);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "Convex::new_unchecked requires a valid strict convex")]
+    fn unchecked_constructor_validates_in_debug_builds() {
+        let _ = Convex::new_unchecked(&[
+            Position::from_raw(0, 0),
+            Position::from_raw(10, 0),
+            Position::from_raw(5, 5),
+            Position::from_raw(10, 10),
+            Position::from_raw(0, 10),
+        ]);
     }
 
     #[test]
