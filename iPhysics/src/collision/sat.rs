@@ -65,8 +65,8 @@ pub(super) fn support(
 
 pub(super) fn offset(point: GeometryPoint, axis: UnitVector, distance: i32) -> GeometryPoint {
     let [x, y] = point.raw();
-    let [offset_x, offset_y] = axis.scaled_raw(distance).raw();
-    GeometryPoint::from_wide_narrow(x as i64 + offset_x as i64, y as i64 + offset_y as i64)
+    let [offset_x, offset_y] = axis.scaled_raw(distance);
+    GeometryPoint::from_wide_narrow(x as i64 + offset_x, y as i64 + offset_y)
 }
 
 #[inline]

@@ -66,11 +66,11 @@ impl UnitVector {
 
     /// Scales this direction by a bounded raw magnitude.
     #[inline(always)]
-    pub fn scaled_raw(self, magnitude: i32) -> RawVec2 {
-        RawVec2::from_wide_clamped(
+    pub fn scaled_raw(self, magnitude: i32) -> [i64; 2] {
+        [
             round_shift_i64(self.x as i64 * magnitude as i64, Self::FRACTION_BITS),
             round_shift_i64(self.y as i64 * magnitude as i64, Self::FRACTION_BITS),
-        )
+        ]
     }
 
     /// Solver variant for values whose intermediate range requires i128.
@@ -153,7 +153,7 @@ mod tests {
         let direction = UnitVector::normalized(RawVec2::from_raw(3, 4)).unwrap();
 
         assert_eq!(direction.raw(), [644_245_094, 858_993_459]);
-        assert_eq!(direction.scaled_raw(10).raw(), [6, 8]);
+        assert_eq!(direction.scaled_raw(10), [6, 8]);
         assert_eq!(direction.dot_raw(RawVec2::from_raw(3, 4)), 5);
         assert!(UnitVector::normalized(RawVec2::ZERO).is_none());
     }

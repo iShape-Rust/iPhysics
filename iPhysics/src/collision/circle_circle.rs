@@ -30,13 +30,13 @@ pub fn collide(
     let penetration = radius_sum - distance;
     let penetration_raw = penetration as u32;
     let contact_offset = circle_a.radius().raw() as i32 - (penetration_raw / 2) as i32;
-    let [offset_x, offset_y] = normal.scaled_raw(contact_offset).raw();
+    let [offset_x, offset_y] = normal.scaled_raw(contact_offset);
     Some(Contact {
         body_a,
         body_b,
         point: GeometryPoint::from_wide_narrow(
-            ax as i64 + offset_x as i64,
-            ay as i64 + offset_y as i64,
+            ax as i64 + offset_x,
+            ay as i64 + offset_y,
         ),
         normal,
         penetration: Length::from_raw(penetration_raw),
