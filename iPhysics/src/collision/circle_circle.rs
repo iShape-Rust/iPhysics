@@ -34,10 +34,7 @@ pub fn collide(
     Some(Contact {
         body_a,
         body_b,
-        point: GeometryPoint::from_i64_unchecked(
-            ax as i64 + offset_x,
-            ay as i64 + offset_y,
-        ),
+        point: GeometryPoint::from_i64_unchecked(ax as i64 + offset_x, ay as i64 + offset_y),
         normal,
         penetration: Length::from_raw(penetration_raw),
     })
@@ -100,13 +97,29 @@ mod tests {
 
     #[test]
     fn contact_point_can_extend_beyond_position_range() {
-        let large = Circle::new(Length::from_raw(Position::MAX_POS as u32)).unwrap();
+        let large = Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).unwrap();
         let small = Circle::new(Length::from_raw(1)).unwrap();
-        let center = Position::from_i32(Position::MAX_POS, Position::MAX_POS);
+        let center = Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION);
         let contact =
             collide(BodyId::new(1), large, center, BodyId::new(2), small, center).unwrap();
 
-        assert!(contact.point.raw()[0] > Position::MAX_POS);
-        assert_eq!(contact.point.raw()[1], Position::MAX_POS);
+        assert!(contact.point.raw()[0] > Position::MAX_POSITION);
+        assert_eq!(contact.point.raw()[1], Position::MAX_POSITION);
+    }
+
+    #[test]
+    fn maximum_penetration_fits_length() {
+        let circle = Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).unwrap();
+        let contact = collide(
+            BodyId::new(1),
+            circle,
+            Position::ZERO,
+            BodyId::new(2),
+            circle,
+            Position::ZERO,
+        )
+        .unwrap();
+
+        assert_eq!(contact.penetration.raw(), 2 * Position::MAX_POSITION as u32);
     }
 }

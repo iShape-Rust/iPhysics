@@ -1,11 +1,11 @@
 use crate::fix::quantize::Quantize;
 
-use super::POSITION_FRACTION_BITS;
+use super::{POSITION_FRACTION_BITS, Position};
 
 /// Non-negative length in metres, stored as unsigned Q16.
 ///
 /// - Resolution: `2^-16 m`, approximately `0.000_015_259 m`.
-/// - Storage range: `0 m...65_536 m` (exclusive upper bound).
+/// - Simulation range: `0 m..16_384 m` (exclusive upper bound).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Length(u32);
 
@@ -14,7 +14,7 @@ impl Length {
     pub(crate) const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
     #[cfg(test)]
     pub(crate) const ZERO: Self = Self(0);
-    pub(crate) const MAX_LENGTH: u32 = (1 << 29) - 1;
+    pub(crate) const MAX_LENGTH: u32 = Position::MAX_POINT as u32;
 
     #[inline(always)]
     pub(crate) const fn from_raw(raw: u32) -> Self {

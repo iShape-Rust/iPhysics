@@ -1,5 +1,5 @@
 use super::Contact;
-use super::sat::{BestAxis, offset, support, project};
+use super::sat::{BestAxis, offset, project, support};
 use crate::body::BodyId;
 use crate::collider::{Circle, Convex};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -34,7 +34,7 @@ pub(super) fn collide(
         .iter()
         .copied()
         .min_by_key(|vertex| vertex.squared_distance(circle_center))?;
-    if let Some(axis) = (closest - circle_center).normalized() {
+    if let Some(axis) = UnitVector::normalized(closest - circle_center) {
         select_circle_axis(
             &mut best,
             axis,

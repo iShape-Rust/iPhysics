@@ -1,23 +1,23 @@
 use super::linear_velocity::LinearVelocity;
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
 use crate::fix::{quantize::Quantize, shift::RoundShift};
-use crate::geometry::short::RawVec2;
+use crate::geometry::vec::RawVec2;
 use crate::{Angle, GeometryPoint};
 use i_float::int::point::IntPoint;
 
 /// World-space position in metres, stored as signed Q16 components.
 ///
 /// - Resolution: `2^-16 m`, approximately `0.000_015_259 m`.
-/// - World range: `-16_384 m..16_384 m` (exclusive upper bound).
-/// - Raw range: `-2^30..2^30` (exclusive upper bound).
+/// - World range: approximately `-8_192 m..8_192 m` per component.
+/// - Raw range: `-(2^29 - 1)..=(2^29 - 1)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Position([i32; 2]);
 
 impl Position {
     pub(crate) const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
-    pub(crate) const MIN_POS: i32 = -(1 << 29) + 1;
-    pub(crate) const MAX_POS: i32 = (1 << 29) - 1;
+    pub(crate) const MIN_POSITION: i32 = -(1 << 29) + 1;
+    pub(crate) const MAX_POSITION: i32 = (1 << 29) - 1;
     pub(crate) const MIN_POINT: i32 = -(1 << 30) + 1;
     pub(crate) const MAX_POINT: i32 = (1 << 30) - 1;
 
@@ -25,22 +25,28 @@ impl Position {
 
     #[inline(always)]
     pub(crate) fn from_i32(x: i32, y: i32) -> Self {
-        let x = x.clamp(Position::MIN_POS, Position::MAX_POS);
-        let y = y.clamp(Position::MIN_POS, Position::MAX_POS);
+        let x = x.clamp(Position::MIN_POSITION, Position::MAX_POSITION);
+        let y = y.clamp(Position::MIN_POSITION, Position::MAX_POSITION);
         Self([x, y])
     }
 
     #[inline(always)]
     pub(crate) fn from_i64(x: i64, y: i64) -> Self {
-        let x = x.clamp(Position::MIN_POS as i64, Position::MAX_POS as i64);
-        let y = y.clamp(Position::MIN_POS as i64, Position::MAX_POS as i64);
+        let x = x.clamp(Position::MIN_POSITION as i64, Position::MAX_POSITION as i64);
+        let y = y.clamp(Position::MIN_POSITION as i64, Position::MAX_POSITION as i64);
         Self([x as i32, y as i32])
     }
 
     #[inline(always)]
     pub(crate) fn from_i128(x: i128, y: i128) -> Self {
-        let x = x.clamp(Position::MIN_POS as i128, Position::MAX_POS as i128);
-        let y = y.clamp(Position::MIN_POS as i128, Position::MAX_POS as i128);
+        let x = x.clamp(
+            Position::MIN_POSITION as i128,
+            Position::MAX_POSITION as i128,
+        );
+        let y = y.clamp(
+            Position::MIN_POSITION as i128,
+            Position::MAX_POSITION as i128,
+        );
         Self([x as i32, y as i32])
     }
 
@@ -48,15 +54,15 @@ impl Position {
     /// invariant. No validation or saturation is performed.
     #[inline(always)]
     pub(crate) const fn from_i32_unchecked(x: i32, y: i32) -> Self {
-        debug_assert!(x >= Self::MIN_POS && x <= Self::MAX_POS);
-        debug_assert!(y >= Self::MIN_POS && y <= Self::MAX_POS);
+        debug_assert!(x >= Self::MIN_POSITION && x <= Self::MAX_POSITION);
+        debug_assert!(y >= Self::MIN_POSITION && y <= Self::MAX_POSITION);
         Self([x, y])
     }
 
     #[inline(always)]
     pub(crate) const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
-        let is_x = x >= Self::MIN_POS && x <= Self::MAX_POS;
-        let is_y = y >= Self::MIN_POS && y <= Self::MAX_POS;
+        let is_x = x >= Self::MIN_POSITION && x <= Self::MAX_POSITION;
+        let is_y = y >= Self::MIN_POSITION && y <= Self::MAX_POSITION;
         if is_x && is_y {
             Some(Self([x, y]))
         } else {
@@ -105,8 +111,7 @@ impl Position {
         )
     }
 
-    /// Returns the component-wise midpoint. The sum is widened before the
-    /// division, and the result is guaranteed to remain inside the world.
+    /// Returns the component-wise midpoint, which remains inside the world.
     #[cfg(test)]
     #[inline(always)]
     pub(crate) const fn midpoint(self, other: Self) -> Self {
@@ -127,11 +132,11 @@ impl Position {
         let [ax, ay] = self.raw();
         let [bx, by] = point.raw();
 
-        Self::from_i32_unchecked(ax + bx, ay + by)
+        Self::from_i32(ax + bx, ay + by)
     }
 
     #[inline(always)]
-    pub(crate) fn uncheck_add(self, point: GeometryPoint) -> GeometryPoint {
+    pub(crate) fn add_geometry_unchecked(self, point: GeometryPoint) -> GeometryPoint {
         let [ax, ay] = self.raw();
         let [bx, by] = point.raw();
 
@@ -189,7 +194,7 @@ mod tests {
 
         assert_eq!(
             (max - min).raw(),
-            [2 * Position::MAX_POS, -2 * Position::MAX_POS]
+            [2 * Position::MAX_POSITION, -2 * Position::MAX_POSITION]
         );
     }
 
@@ -197,16 +202,18 @@ mod tests {
     fn raw_constructor_clamps_to_world_boundary() {
         assert_eq!(
             Position::from_i32(i32::MIN, i32::MAX).raw(),
-            [Position::MIN_POS, Position::MAX_POS]
+            [Position::MIN_POSITION, Position::MAX_POSITION]
         );
-        assert!(Position::checked_from_raw(Position::MIN_POS, Position::MAX_POS).is_some());
-        assert!(Position::checked_from_raw(Position::MIN_POS - 1, 0).is_none());
+        assert!(
+            Position::checked_from_raw(Position::MIN_POSITION, Position::MAX_POSITION).is_some()
+        );
+        assert!(Position::checked_from_raw(Position::MIN_POSITION - 1, 0).is_none());
     }
 
     #[test]
     fn midpoint_stays_in_world() {
-        let min = Position::from_i32(Position::MIN_POS, Position::MIN_POS);
-        let max = Position::from_i32(Position::MAX_POS, Position::MAX_POS);
+        let min = Position::from_i32(Position::MIN_POSITION, Position::MIN_POSITION);
+        let max = Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION);
 
         assert_eq!(min.midpoint(max), Position::ZERO);
     }

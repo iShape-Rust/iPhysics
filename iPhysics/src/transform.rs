@@ -34,12 +34,13 @@ impl Transform {
         self.position.add_point(local.rotate(self.angle))
     }
 
-    /// Transforms a collider-local point into the full-i32 geometry domain.
+    /// Transforms a collider-local point into the bounded geometry domain.
     /// Collider construction guarantees the local point's radius, so the
     /// rotated point plus any valid body position fits without saturation.
     #[inline]
     pub(crate) fn apply_geometry(self, local: Position) -> GeometryPoint {
-        self.position.uncheck_add(local.rotate(self.angle))
+        self.position
+            .add_geometry_unchecked(local.rotate(self.angle))
     }
 
     /// Composes a child-local transform with this parent transform.
@@ -93,13 +94,13 @@ mod tests {
     #[test]
     fn arbitrary_point_transformation_saturates_at_world_boundary() {
         let transform = Transform::new(
-            Position::from_i32(Position::MAX_POS, Position::MAX_POS),
+            Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION),
             Angle::ZERO,
         );
 
         assert_eq!(
             transform.apply(Position::from_i32(1, 1)),
-            Position::from_i32(Position::MAX_POS, Position::MAX_POS)
+            Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION)
         );
     }
 }

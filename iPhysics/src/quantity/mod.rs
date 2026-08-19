@@ -14,6 +14,7 @@ mod linear_velocity;
 mod mass;
 mod position;
 
+pub(crate) use crate::geometry::vec::RawVec2;
 pub use angle::{Angle, AngleDelta};
 pub use angular_acceleration::AngularAcceleration;
 pub use angular_velocity::AngularVelocity;
@@ -23,7 +24,6 @@ pub use linear_acceleration::LinearAcceleration;
 pub use linear_velocity::LinearVelocity;
 pub use mass::Mass;
 pub use position::Position;
-pub(crate) use crate::geometry::short::RawVec2;
 
 /// Number of fixed simulation ticks in one second.
 pub const TICKS_PER_SECOND: u32 = 64;

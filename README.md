@@ -17,9 +17,9 @@ inclusive unless an upper bound is explicitly marked as exclusive.
 
 | Quantity / Rust type | Storage | Resolution | Enforced range | Rationale |
 | --- | ---: | ---: | ---: | --- |
-| Body position [`Position`](iPhysics/src/quantity/position.rs) | 2 × `i32`, Q16 | `2^-16 m` = `0.0000152588 m` (about `0.0153 mm`) | `-16,384 m` to `16,384 m` exclusive per axis | A world is about `32.768 km` wide. The `[-2^30, 2^30)` raw bound guarantees that `Position - Position` fits in the symmetric `i32` components of `RawVec2`, while its dot and cross products fit in `i64`. |
-| Derived world point [`GeometryPoint`](iPhysics/src/geometry/point.rs) | 2 × `i32`, Q16 | `2^-16 m` | `-32,768 m` to `32,768 m` exclusive per axis | Collider vertices, contact points, and AABB bounds may extend beyond body-center limits. The full `i32` range avoids clipping derived geometry. |
-| Non-negative length [`Length`](iPhysics/src/quantity/length.rs) | `u32`, Q16 | `2^-16 m` | `0` to `65,536 m` exclusive | Uses the same scale as positions, so distances and radii require no scale conversion. A circle radius and a convex vertex radius are additionally limited to `16,384 m` exclusive. |
+| Body position [`Position`](iPhysics/src/quantity/position.rs) | 2 × `i32`, Q16 | `2^-16 m` = `0.0000152588 m` (about `0.0153 mm`) | Approximately `-8,192 m` to `8,192 m` per axis | The symmetric raw bound `±(2^29 - 1)` guarantees that position sums and differences fit in `i32`. |
+| Derived world point [`GeometryPoint`](iPhysics/src/geometry/point.rs) | 2 × `i32`, Q16 | `2^-16 m` | Approximately `-16,384 m` to `16,384 m` per axis | The symmetric raw bound `±(2^30 - 1)` covers translated collider geometry while guaranteeing that the sum or difference of any two points fits in `i32`. |
+| Non-negative length [`Length`](iPhysics/src/quantity/length.rs) | `u32`, Q16 | `2^-16 m` | `0` to `16,384 m` exclusive | The raw maximum `2^30 - 1` covers penetration up to the sum of two maximum collider radii. Circle and convex radii are additionally limited to `2^29 - 1` raw units. |
 | Linear velocity [`LinearVelocity`](iPhysics/src/quantity/linear_velocity.rs) | 2 × `i32`, Q24 | `2^-24 m/s` = `5.96046e-8 m/s` | `-128` inclusive to `128 m/s` exclusive per component | Uses the full underlying `i32` Q24 range; integration and solver operations use widened intermediates. |
 | Linear acceleration [`LinearAcceleration`](iPhysics/src/quantity/linear_acceleration.rs) | 2 × `i32`, Q24 | `2^-24 m/s²` = `5.96046e-8 m/s²` | `-128` inclusive to `128 m/s²` exclusive per component | Uses the full underlying `i32` Q24 range; acceleration-to-velocity integration widens intermediates to `i64`. |
 | Orientation [`Angle`](iPhysics/src/quantity/angle.rs) | `u32` binary angle | `2π / 2^32` = `1.46292e-9 rad` (about `8.38e-8°`) | One complete turn, wrapping | Overflow performs exact angle normalization. Quarter, half, and full turns are exact powers of two. Deterministic sine/cosine uses non-expanding integer Q30 CORDIC. |
@@ -60,15 +60,14 @@ this remains below the intended minimum gameplay mass of roughly `0.01 kg`.
 
 - Body centers are always bounded `Position` values and saturate at the world
   edge during integration.
-- Circle radius must be non-zero and no greater than `Position::MAX_RAW` in
-  Q16.
+- Circle radius must be non-zero and no greater than `2^29 - 1` raw Q16 units.
 - Every local convex vertex must be within the same radial limit and a convex
   has between 3 and 6 vertices.
 - Integer CORDIC rotation is conservatively non-expanding. Consequently, a
-  valid local vertex plus any valid body center fits in a full-`i32`
-  `GeometryPoint`; transformed geometry is narrowed without runtime clamp.
-- `Aabb` internally reuses `i_float::IntRect<i32>` and spans the full Q16
-  `i32` geometry range, not the smaller body-center range.
+  valid local vertex plus any valid body center fits in the bounded
+  `GeometryPoint` range without runtime clamp.
+- `Aabb` internally reuses `i_float::IntRect<i32>` while enforcing the same
+  bounded Q16 range as `GeometryPoint`.
 
 These bounds are deliberately generous for the expected `0.1–1,000 m`
 gameplay scale while keeping common geometry products in `i64`.

@@ -307,8 +307,7 @@ fn add_velocity(body: &mut Body, dx: i128, dy: i128) {
 
 fn add_position(body: &mut Body, dx: i128, dy: i128) {
     let [x, y] = body.state().transform().position.raw();
-    body.state_mut().transform.position =
-        Position::from_i128(x as i128 + dx, y as i128 + dy);
+    body.state_mut().transform.position = Position::from_i128(x as i128 + dx, y as i128 + dy);
 }
 
 fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut Body) {

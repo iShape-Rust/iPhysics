@@ -5,8 +5,8 @@ use i_float::int::rect::IntRect;
 ///
 /// This is a zero-cost physical-units wrapper around [`IntRect<i32>`]. Borders
 /// are included in intersection tests, so exactly touching shapes remain
-/// collision candidates for the narrow phase. Bounds use the full `i32` range
-/// and may extend beyond the more restrictive center range of
+/// collision candidates for the narrow phase. Bounds use the bounded
+/// [`GeometryPoint`] range and may extend beyond the center range of
 /// [`crate::quantity::Position`].
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,10 +38,15 @@ impl Aabb {
         Self(IntRect::with_ab(a.raw_point(), b.raw_point()))
     }
 
-    /// Creates a boundary whose ordering and full-i32 range have already been
+    /// Creates a boundary whose ordering and geometry range have already been
     /// proved by the caller.
     #[inline(always)]
     pub(crate) const fn from_raw_unchecked(min_x: i32, max_x: i32, min_y: i32, max_y: i32) -> Self {
+        debug_assert!(min_x <= max_x && min_y <= max_y);
+        debug_assert!(min_x >= crate::quantity::Position::MIN_POINT);
+        debug_assert!(min_y >= crate::quantity::Position::MIN_POINT);
+        debug_assert!(max_x <= crate::quantity::Position::MAX_POINT);
+        debug_assert!(max_y <= crate::quantity::Position::MAX_POINT);
         Self(IntRect {
             min_x,
             max_x,
@@ -100,8 +105,11 @@ mod tests {
     #[test]
     fn validates_min_and_max() {
         assert!(
-            Aabb::from_min_max(GeometryPoint::from_i32_unchecked(1, 0), GeometryPoint::from_i32_unchecked(0, 1))
-                .is_none()
+            Aabb::from_min_max(
+                GeometryPoint::from_i32_unchecked(1, 0),
+                GeometryPoint::from_i32_unchecked(0, 1)
+            )
+            .is_none()
         );
     }
 

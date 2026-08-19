@@ -1,11 +1,11 @@
 use crate::quantity::{Position, RawVec2};
 use i_float::int::point::IntPoint;
 
-/// Derived world-space Q16 point using the full signed `i32` range.
+/// Derived world-space Q16 point bounded to `±(2^30 - 1)` per component.
 ///
 /// Body origins use the more restrictive [`Position`] type. Collider vertices,
 /// contact points, and AABB bounds may extend beyond that center range while
-/// still fitting in full `i32` under collider-size invariants.
+/// remaining in the bounded geometry range under collider-size invariants.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct GeometryPoint {
@@ -23,7 +23,7 @@ impl GeometryPoint {
         Self { x, y }
     }
 
-    /// Narrows a derived value whose full-i32 range is guaranteed by collider
+    /// Narrows a derived value whose geometry range is guaranteed by collider
     /// construction. Debug builds expose a broken invariant; release performs
     /// only the casts and never clamps the geometry.
     #[inline(always)]
@@ -54,26 +54,12 @@ impl GeometryPoint {
 
     #[inline(always)]
     pub(crate) const fn midpoint(self, other: Self) -> Self {
-        Self::from_i32_unchecked(
-            ((self.x as i64 + other.x as i64) / 2) as i32,
-            ((self.y as i64 + other.y as i64) / 2) as i32,
-        )
+        Self::from_i32_unchecked((self.x + other.x) / 2, (self.y + other.y) / 2)
     }
 
     #[inline(always)]
-    pub(crate) const fn delta(self, other: Self) -> [i64; 2] {
-        [
-            self.x as i64 - other.x as i64,
-            self.y as i64 - other.y as i64,
-        ]
-    }
-
-    #[inline(always)]
-    pub(crate) const fn squared_distance(self, other: Self) -> u128 {
-        let [x, y] = self.delta(other);
-        let x = x as i128;
-        let y = y as i128;
-        (x * x + y * y) as u128
+    pub(crate) fn squared_distance(self, other: Self) -> u64 {
+        (self - other).squared_magnitude()
     }
 }
 
@@ -126,5 +112,18 @@ mod tests {
         let b = GeometryPoint::from_i32_unchecked(Position::MAX_POINT - 2, Position::MIN_POINT);
 
         assert_eq!(a.midpoint(b).raw(), [Position::MAX_POINT - 1, 0]);
+    }
+
+    #[test]
+    fn extreme_difference_fits_raw_vector() {
+        let min = GeometryPoint::from_i32_unchecked(Position::MIN_POINT, Position::MIN_POINT);
+        let max = GeometryPoint::from_i32_unchecked(Position::MAX_POINT, Position::MAX_POINT);
+        let expected = 2 * Position::MAX_POINT;
+
+        assert_eq!((max - min).raw(), [expected, expected]);
+        assert_eq!(
+            max.squared_distance(min),
+            2 * expected as u64 * expected as u64
+        );
     }
 }

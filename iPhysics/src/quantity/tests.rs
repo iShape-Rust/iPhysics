@@ -70,7 +70,7 @@ fn integration_saturates_at_world_boundary() {
     let position = Position::from_i32(i32::MAX, 0);
     let velocity = LinearVelocity::from_meters_per_second(1.0, 0.0).unwrap();
 
-    assert_eq!(position.advance(velocity).raw()[0], Position::MAX_POS);
+    assert_eq!(position.advance(velocity).raw()[0], Position::MAX_POSITION);
 }
 
 #[test]

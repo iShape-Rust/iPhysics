@@ -18,8 +18,8 @@ pub enum ConvexError {
 ///
 /// Vertices are canonicalized to counter-clockwise order. Vertices and edge
 /// normals are stored inline; no allocation is required by a dynamic body.
-/// Every vertex must be within `Position::MAX_RAW` of the local origin so a
-/// rotated vertex plus any valid body position still fits in full `i32`.
+/// Every vertex must be within `Position::MAX_POS` of the local origin so a
+/// rotated vertex plus any valid body position fits in `GeometryPoint`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Convex {
     vertices: [Position; MAX_CONVEX_VERTICES],
@@ -93,6 +93,11 @@ impl Convex {
     }
 
     #[inline(always)]
+    pub const fn is_empty(self) -> bool {
+        false
+    }
+
+    #[inline(always)]
     pub(crate) fn vertices(&self) -> &[Position] {
         &self.vertices[..self.count as usize]
     }
@@ -127,7 +132,7 @@ impl Convex {
         Aabb::from_points(min, max)
     }
 
-    /// Returns derived world-space vertices in the full-i32 geometry domain.
+    /// Returns derived world-space vertices in the bounded geometry domain.
     /// The constructor's radial invariant makes this transformation exact:
     /// no world-boundary saturation is needed.
     pub fn transformed_vertices(self, transform: Transform) -> TransformedVertices {
@@ -174,7 +179,7 @@ fn validate_vertices(vertices: &[Position]) -> Result<i8, ConvexError> {
         return Err(ConvexError::TooManyVertices);
     }
 
-    let max_radius = Position::MAX_POS as u64;
+    let max_radius = Position::MAX_POSITION as u64;
     let max_squared_radius = max_radius * max_radius;
     if vertices
         .iter()
@@ -419,7 +424,7 @@ mod tests {
 
     #[test]
     fn vertices_must_fit_local_radius_limit() {
-        let max = Position::MAX_POS;
+        let max = Position::MAX_POSITION;
         assert_eq!(
             Convex::new(&[
                 Position::from_i32(max, max),
@@ -441,7 +446,7 @@ mod tests {
 
     #[test]
     fn aabb_can_extend_beyond_position_range() {
-        let max = Position::MAX_POS;
+        let max = Position::MAX_POSITION;
         let convex = Convex::new(&[
             Position::from_i32(max, 0),
             Position::from_i32(0, 1),
@@ -450,13 +455,13 @@ mod tests {
         .unwrap();
         let aabb = convex.aabb(Transform::new(Position::from_i32(max, max), Angle::ZERO));
 
-        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POS);
-        assert!(aabb.max().raw()[0] > Position::MAX_POS);
+        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POSITION);
+        assert!(aabb.max().raw()[0] > Position::MAX_POSITION);
     }
 
     #[test]
     fn radial_limit_survives_non_cardinal_rotation_at_world_edge() {
-        let max = Position::MAX_POS;
+        let max = Position::MAX_POSITION;
         let convex = Convex::new(&[
             Position::from_i32(max, 0),
             Position::from_i32(0, 1),

@@ -3,7 +3,7 @@ use crate::quantity::{Length, Position};
 
 /// Circle centered at its collider transform origin.
 ///
-/// Radius is limited to `Position::MAX_RAW` in Q16 so two radii, their square,
+/// Radius is limited to `Position::MAX_POS` in Q16 so two radii, their square,
 /// and all circle narrow-phase intermediates fit in 64 bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Circle {
@@ -13,7 +13,7 @@ pub struct Circle {
 impl Circle {
     #[inline]
     pub const fn new(radius: Length) -> Option<Self> {
-        if radius.raw() == 0 || radius.raw() > Position::MAX_POS as u32 {
+        if radius.raw() == 0 || radius.raw() > Position::MAX_POSITION as u32 {
             None
         } else {
             Some(Self { radius })
@@ -33,8 +33,10 @@ impl Circle {
         let max_x = x as i64 + r;
         let min_y = y as i64 - r;
         let max_y = y as i64 + r;
-        debug_assert!(min_x >= i32::MIN as i64 && max_x <= i32::MAX as i64);
-        debug_assert!(min_y >= i32::MIN as i64 && max_y <= i32::MAX as i64);
+        debug_assert!(min_x >= Position::MIN_POINT as i64);
+        debug_assert!(min_y >= Position::MIN_POINT as i64);
+        debug_assert!(max_x <= Position::MAX_POINT as i64);
+        debug_assert!(max_y <= Position::MAX_POINT as i64);
         Aabb::from_raw_unchecked(min_x as i32, max_x as i32, min_y as i32, max_y as i32)
     }
 }
@@ -46,16 +48,17 @@ mod tests {
     #[test]
     fn radius_respects_world_limit() {
         assert!(Circle::new(Length::ZERO).is_none());
-        assert!(Circle::new(Length::from_raw(Position::MAX_POS as u32)).is_some());
+        assert!(Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).is_some());
+        assert!(Circle::new(Length::from_raw(Position::MAX_POSITION as u32 + 1)).is_none());
     }
 
     #[test]
     fn aabb_can_extend_beyond_position_range() {
-        let circle = Circle::new(Length::from_raw(Position::MAX_POS as u32)).unwrap();
-        let center = Position::from_i32(Position::MAX_POS, Position::MAX_POS);
+        let circle = Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).unwrap();
+        let center = Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION);
         let aabb = circle.aabb(center);
 
-        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POS);
-        assert!(aabb.max().raw()[0] > Position::MAX_POS);
+        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POSITION);
+        assert!(aabb.max().raw()[0] > Position::MAX_POSITION);
     }
 }

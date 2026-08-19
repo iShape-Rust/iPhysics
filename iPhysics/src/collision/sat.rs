@@ -10,7 +10,7 @@ pub(super) fn select_axis(
     center_a: GeometryPoint,
     center_b: GeometryPoint,
 ) -> Option<()> {
-    if dot_delta(center_a, center_b, axis) < 0 {
+    if axis.dot(center_b - center_a) < 0 {
         axis = -axis;
     }
     let (min_a, max_a) = project(a, axis);
@@ -65,9 +65,3 @@ pub(super) fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64
     }
     (min, max)
 }
-
-#[inline(always)]
-fn dot_delta(a: GeometryPoint, b: GeometryPoint, axis: UnitVector) -> i64 {
-    axis.dot_wide_raw(b.delta(a))
-}
-

@@ -1,6 +1,6 @@
-use crate::{Angle, GeometryPoint};
 use crate::fix::shift::RoundShift;
 use crate::quantity::RawVec2;
+use crate::{Angle, GeometryPoint};
 
 /// Dimensionless normalized direction stored as signed Q30 components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -142,5 +142,12 @@ mod tests {
         assert_eq!(direction.scaled_raw(10), [6, 8]);
         assert_eq!(direction.dot(RawVec2::from_i32(3, 4)), 5);
         assert!(UnitVector::normalized(RawVec2::ZERO).is_none());
+    }
+
+    #[test]
+    fn normalizes_negative_components() {
+        let direction = UnitVector::normalized(RawVec2::from_i32(-3, -4)).unwrap();
+
+        assert_eq!(direction.raw(), [-644_245_094, -858_993_459]);
     }
 }
