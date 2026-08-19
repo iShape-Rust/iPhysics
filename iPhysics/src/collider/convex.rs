@@ -29,8 +29,6 @@ pub struct Convex {
 }
 
 impl Convex {
-    pub const MAX_VERTICES: usize = MAX_CONVEX_VERTICES;
-
     #[inline(always)]
     pub fn new(vertices: &[Position]) -> Result<Self, ConvexError> {
         let winding = validate_vertices(vertices)?;
@@ -42,8 +40,9 @@ impl Convex {
     ///
     /// The vertices may use either winding and any cyclic starting point; the
     /// result is still canonicalized before its center and normals are built.
+    #[cfg(test)]
     #[inline(always)]
-    pub fn new_unchecked(vertices: &[Position]) -> Self {
+    fn new_unchecked(vertices: &[Position]) -> Self {
         debug_assert!(
             validate_vertices(vertices).is_ok(),
             "Convex::new_unchecked requires a valid strict convex"
@@ -94,23 +93,14 @@ impl Convex {
     }
 
     #[inline(always)]
-    pub const fn is_empty(self) -> bool {
-        false
-    }
-
-    #[inline(always)]
-    pub fn vertices(&self) -> &[Position] {
+    pub(crate) fn vertices(&self) -> &[Position] {
         &self.vertices[..self.count as usize]
     }
 
-    #[inline(always)]
-    pub fn normals(&self) -> &[UnitVector] {
-        &self.normals[..self.count as usize]
-    }
-
     /// Local center of mass for a polygon with uniform density.
+    #[cfg(test)]
     #[inline(always)]
-    pub const fn center(self) -> Position {
+    const fn center(self) -> Position {
         self.center
     }
 
@@ -118,11 +108,12 @@ impl Convex {
     ///
     /// Area is not part of the per-tick collision path, so it is computed on
     /// demand instead of increasing every convex collider's storage.
-    pub fn doubled_area_raw(&self) -> u64 {
+    #[cfg(test)]
+    fn doubled_area_raw(&self) -> u64 {
         doubled_area(self.vertices())
     }
 
-    pub fn aabb(self, transform: Transform) -> Aabb {
+    pub(crate) fn aabb(self, transform: Transform) -> Aabb {
         let vertices = self.transformed_vertices(transform);
         let mut min = vertices[0];
         let mut max = vertices[0];
@@ -240,6 +231,7 @@ fn validate_vertices(vertices: &[Position]) -> Result<i8, ConvexError> {
     Ok(winding)
 }
 
+#[cfg(test)]
 #[inline(always)]
 fn winding_unchecked(vertices: &[Position]) -> i8 {
     let cross = (vertices[1] - vertices[0]).cross(vertices[2] - vertices[1]);
@@ -272,6 +264,7 @@ fn center_of_mass(vertices: &[Position]) -> Position {
     )
 }
 
+#[cfg(test)]
 fn doubled_area(vertices: &[Position]) -> u64 {
     let mut area2 = 0_i64;
     for edge in vertices.windows(2) {

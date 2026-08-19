@@ -14,31 +14,31 @@ use i_float::int::point::IntPoint;
 pub struct Position([i32; 2]);
 
 impl Position {
-    pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
+    pub(crate) const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
-    pub const MIN_POS: i32 = -(1 << 29) + 1;
-    pub const MAX_POS: i32 = (1 << 29) - 1;
-    pub const MIN_POINT: i32 = -(1 << 30) + 1;
-    pub const MAX_POINT: i32 = (1 << 30) - 1;
+    pub(crate) const MIN_POS: i32 = -(1 << 29) + 1;
+    pub(crate) const MAX_POS: i32 = (1 << 29) - 1;
+    pub(crate) const MIN_POINT: i32 = -(1 << 30) + 1;
+    pub(crate) const MAX_POINT: i32 = (1 << 30) - 1;
 
     pub const ZERO: Self = Self([0, 0]);
 
     #[inline(always)]
-    pub fn from_i32(x: i32, y: i32) -> Self {
+    pub(crate) fn from_i32(x: i32, y: i32) -> Self {
         let x = x.clamp(Position::MIN_POS, Position::MAX_POS);
         let y = y.clamp(Position::MIN_POS, Position::MAX_POS);
         Self([x, y])
     }
 
     #[inline(always)]
-    pub fn from_i64(x: i64, y: i64) -> Self {
+    pub(crate) fn from_i64(x: i64, y: i64) -> Self {
         let x = x.clamp(Position::MIN_POS as i64, Position::MAX_POS as i64);
         let y = y.clamp(Position::MIN_POS as i64, Position::MAX_POS as i64);
         Self([x as i32, y as i32])
     }
 
     #[inline(always)]
-    pub fn from_i128(x: i128, y: i128) -> Self {
+    pub(crate) fn from_i128(x: i128, y: i128) -> Self {
         let x = x.clamp(Position::MIN_POS as i128, Position::MAX_POS as i128);
         let y = y.clamp(Position::MIN_POS as i128, Position::MAX_POS as i128);
         Self([x as i32, y as i32])
@@ -54,7 +54,7 @@ impl Position {
     }
 
     #[inline(always)]
-    pub const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
+    pub(crate) const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
         let is_x = x >= Self::MIN_POS && x <= Self::MAX_POS;
         let is_y = y >= Self::MIN_POS && y <= Self::MAX_POS;
         if is_x && is_y {
@@ -77,7 +77,7 @@ impl Position {
     }
 
     #[inline(always)]
-    pub const fn raw(self) -> [i32; 2] {
+    pub(crate) const fn raw(self) -> [i32; 2] {
         self.0
     }
 
@@ -107,8 +107,9 @@ impl Position {
 
     /// Returns the component-wise midpoint. The sum is widened before the
     /// division, and the result is guaranteed to remain inside the world.
+    #[cfg(test)]
     #[inline(always)]
-    pub const fn midpoint(self, other: Self) -> Self {
+    pub(crate) const fn midpoint(self, other: Self) -> Self {
         let [ax, ay] = self.raw();
         let [bx, by] = other.raw();
         Self::from_i32_unchecked((ax + bx) / 2, (ay + by) / 2)
@@ -117,7 +118,7 @@ impl Position {
     /// Returns the squared raw Q16 distance. The result has 32 fractional
     /// bits and fits in `u64` for the bounded world range.
     #[inline(always)]
-    pub fn squared_distance(self, other: Self) -> u64 {
+    pub(crate) fn squared_distance(self, other: Self) -> u64 {
         (self - other).squared_magnitude()
     }
 

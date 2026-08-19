@@ -13,7 +13,6 @@ pub mod world;
 pub use body::{Body, BodyId, BodyState, Material, SleepConfig, StaticBody};
 pub use collider::{
     Circle, Collider, ColliderPart, CompositeCollider, CompositeColliderError, Convex, ConvexError,
-    TransformedVertices,
 };
 pub use collision::Contact;
 pub use geometry::{Aabb, GeometryPoint, UnitVector};

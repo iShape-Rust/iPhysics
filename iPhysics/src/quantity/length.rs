@@ -10,13 +10,14 @@ use super::POSITION_FRACTION_BITS;
 pub struct Length(u32);
 
 impl Length {
-    pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
-    pub const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
-    pub const ZERO: Self = Self(0);
-    pub const MAX_LENGTH: u32 = (1 << 29) - 1;
+    pub(crate) const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
+    pub(crate) const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
+    #[cfg(test)]
+    pub(crate) const ZERO: Self = Self(0);
+    pub(crate) const MAX_LENGTH: u32 = (1 << 29) - 1;
 
     #[inline(always)]
-    pub const fn from_raw(raw: u32) -> Self {
+    pub(crate) const fn from_raw(raw: u32) -> Self {
         debug_assert!(raw <= Self::MAX_LENGTH);
         Self(raw)
     }
@@ -32,7 +33,7 @@ impl Length {
     }
 
     #[inline(always)]
-    pub const fn raw(self) -> u32 {
+    pub(crate) const fn raw(self) -> u32 {
         self.0
     }
 

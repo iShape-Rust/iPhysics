@@ -10,13 +10,12 @@ pub struct UnitVector {
 }
 
 impl UnitVector {
-    pub const FRACTION_BITS: u32 = 30;
-    pub const X: Self = Self { x: 1 << 30, y: 0 };
-    pub const Y: Self = Self { x: 0, y: 1 << 30 };
+    pub(crate) const FRACTION_BITS: u32 = 30;
+    pub(crate) const X: Self = Self { x: 1 << 30, y: 0 };
 
     /// Normalizes a non-zero raw vector into a deterministic Q30 direction.
     #[inline]
-    pub fn normalized(vector: RawVec2) -> Option<Self> {
+    pub(crate) fn normalized(vector: RawVec2) -> Option<Self> {
         Self::normalized_with_length(vector, vector.squared_magnitude().isqrt())
     }
 

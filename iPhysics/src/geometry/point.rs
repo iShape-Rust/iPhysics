@@ -14,7 +14,7 @@ pub struct GeometryPoint {
 }
 
 impl GeometryPoint {
-    pub const ZERO: Self = Self { x: 0, y: 0 };
+    pub(crate) const ZERO: Self = Self { x: 0, y: 0 };
 
     #[inline(always)]
     pub(crate) const fn from_i32_unchecked(x: i32, y: i32) -> Self {
@@ -39,7 +39,7 @@ impl GeometryPoint {
     }
 
     #[inline(always)]
-    pub const fn raw_point(self) -> IntPoint<i32> {
+    pub(crate) const fn raw_point(self) -> IntPoint<i32> {
         IntPoint {
             x: self.x,
             y: self.y,
@@ -53,7 +53,7 @@ impl GeometryPoint {
     }
 
     #[inline(always)]
-    pub const fn midpoint(self, other: Self) -> Self {
+    pub(crate) const fn midpoint(self, other: Self) -> Self {
         Self::from_i32_unchecked(
             ((self.x as i64 + other.x as i64) / 2) as i32,
             ((self.y as i64 + other.y as i64) / 2) as i32,

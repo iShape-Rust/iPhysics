@@ -14,8 +14,9 @@ pub struct Aabb(IntRect<i32>);
 
 impl Aabb {
     /// Creates a boundary from its minimum and maximum world positions.
+    #[cfg(test)]
     #[inline]
-    pub const fn from_min_max(min: GeometryPoint, max: GeometryPoint) -> Option<Self> {
+    const fn from_min_max(min: GeometryPoint, max: GeometryPoint) -> Option<Self> {
         let min = min.raw_point();
         let max = max.raw_point();
 
@@ -33,7 +34,7 @@ impl Aabb {
 
     /// Creates the smallest boundary containing both positions.
     #[inline(always)]
-    pub fn from_points(a: GeometryPoint, b: GeometryPoint) -> Self {
+    pub(crate) fn from_points(a: GeometryPoint, b: GeometryPoint) -> Self {
         Self(IntRect::with_ab(a.raw_point(), b.raw_point()))
     }
 
@@ -61,49 +62,13 @@ impl Aabb {
 
     /// Tests overlap including shared borders.
     #[inline(always)]
-    pub fn intersects(self, other: Self) -> bool {
+    pub(crate) fn intersects(self, other: Self) -> bool {
         self.0.is_intersect_border_include(&other.0)
     }
 
     #[inline(always)]
-    pub fn contains(self, point: GeometryPoint) -> bool {
-        self.0.contains(point.raw_point())
-    }
-
-    #[inline(always)]
-    pub fn union(self, other: Self) -> Self {
+    pub(crate) fn union(self, other: Self) -> Self {
         Self(IntRect::with_rects(&self.0, &other.0))
-    }
-
-    /// Exposes the underlying rectangle for interoperability with `i_float`.
-    #[inline(always)]
-    pub const fn as_int_rect(&self) -> &IntRect<i32> {
-        &self.0
-    }
-
-    #[inline(always)]
-    pub const fn into_int_rect(self) -> IntRect<i32> {
-        self.0
-    }
-}
-
-impl TryFrom<IntRect<i32>> for Aabb {
-    type Error = ();
-
-    #[inline(always)]
-    fn try_from(rect: IntRect<i32>) -> Result<Self, Self::Error> {
-        if rect.min_x <= rect.max_x && rect.min_y <= rect.max_y {
-            Ok(Self(rect))
-        } else {
-            Err(())
-        }
-    }
-}
-
-impl From<Aabb> for IntRect<i32> {
-    #[inline(always)]
-    fn from(aabb: Aabb) -> Self {
-        aabb.0
     }
 }
 
@@ -154,17 +119,5 @@ mod tests {
 
         assert_eq!(union.min(), GeometryPoint::from_i32_unchecked(-5, -7));
         assert_eq!(union.max(), GeometryPoint::from_i32_unchecked(9, 8));
-    }
-
-    #[test]
-    fn int_rect_conversion_accepts_bounds_outside_position_range() {
-        let rect = IntRect {
-            min_x: i32::MIN,
-            max_x: i32::MAX,
-            min_y: i32::MIN,
-            max_y: i32::MAX,
-        };
-
-        assert!(Aabb::try_from(rect).is_ok());
     }
 }

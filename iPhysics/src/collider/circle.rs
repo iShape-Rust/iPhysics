@@ -26,7 +26,7 @@ impl Circle {
     }
 
     #[inline]
-    pub fn aabb(self, center: Position) -> Aabb {
+    pub(crate) fn aabb(self, center: Position) -> Aabb {
         let [x, y] = center.raw();
         let r = self.radius.raw() as i64;
         let min_x = x as i64 - r;
