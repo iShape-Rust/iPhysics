@@ -31,7 +31,7 @@ impl Transform {
     /// arbitrary local point has no collider-radius invariant.
     #[inline]
     pub fn apply(self, local: Position) -> Position {
-        self.position.saturating_add(local.rotate(self.angle))
+        self.position.add_point(local.rotate(self.angle))
     }
 
     /// Transforms a collider-local point into the full-i32 geometry domain.
@@ -82,24 +82,24 @@ mod tests {
 
     #[test]
     fn applies_cardinal_rotation_exactly() {
-        let transform = Transform::new(Position::from_raw(100, 200), Angle::QUARTER_TURN);
+        let transform = Transform::new(Position::from_i32(100, 200), Angle::QUARTER_TURN);
 
         assert_eq!(
-            transform.apply(Position::from_raw(30, 10)),
-            Position::from_raw(90, 230)
+            transform.apply(Position::from_i32(30, 10)),
+            Position::from_i32(90, 230)
         );
     }
 
     #[test]
     fn arbitrary_point_transformation_saturates_at_world_boundary() {
         let transform = Transform::new(
-            Position::from_raw(Position::MAX_RAW, Position::MAX_RAW),
+            Position::from_i32(Position::MAX_POS, Position::MAX_POS),
             Angle::ZERO,
         );
 
         assert_eq!(
-            transform.apply(Position::from_raw(1, 1)),
-            Position::from_raw(Position::MAX_RAW, Position::MAX_RAW)
+            transform.apply(Position::from_i32(1, 1)),
+            Position::from_i32(Position::MAX_POS, Position::MAX_POS)
         );
     }
 }

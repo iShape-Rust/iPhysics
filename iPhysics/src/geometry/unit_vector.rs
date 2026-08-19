@@ -1,4 +1,4 @@
-use crate::Angle;
+use crate::{Angle, GeometryPoint};
 use crate::fix::shift::RoundShift;
 use crate::quantity::RawVec2;
 
@@ -36,37 +36,24 @@ impl UnitVector {
         ))
     }
 
-    /// Normalizes a full-i32 geometry-point difference. Components can require
-    /// 33 signed bits, so squared distance and scaling use i128 internally.
-    #[inline]
-    pub(crate) fn normalized_wide(vector: [i64; 2]) -> Option<Self> {
-        let x = vector[0] as i128;
-        let y = vector[1] as i128;
-        let length = (x * x + y * y).isqrt();
-        if length == 0 {
-            return None;
-        }
-
-        let scale = 1_i128 << Self::FRACTION_BITS;
-        Some(Self::from_raw(
-            (x * scale / length) as i32,
-            (y * scale / length) as i32,
-        ))
-    }
-
     /// Projects a bounded raw vector onto this direction, preserving the
     /// vector's fixed-point scale.
     #[inline(always)]
-    pub const fn dot_raw(self, vector: RawVec2) -> i64 {
+    pub(crate) fn dot(self, vector: RawVec2) -> i64 {
         round_shift_i64(
-            vector.dot(RawVec2::from_raw_unchecked(self.x, self.y)),
+            vector.dot(RawVec2::from_i32(self.x, self.y)),
             Self::FRACTION_BITS,
         )
     }
 
+    #[inline(always)]
+    pub(crate) fn dot_point(self, point: GeometryPoint) -> i64 {
+        self.dot(point.into())
+    }
+
     /// Scales this direction by a bounded raw magnitude.
     #[inline(always)]
-    pub fn scaled_raw(self, magnitude: i32) -> [i64; 2] {
+    pub(crate) fn scaled_raw(self, magnitude: i32) -> [i64; 2] {
         [
             round_shift_i64(self.x as i64 * magnitude as i64, Self::FRACTION_BITS),
             round_shift_i64(self.y as i64 * magnitude as i64, Self::FRACTION_BITS),
@@ -150,11 +137,11 @@ mod tests {
 
     #[test]
     fn normalizes_raw_vector_to_q30() {
-        let direction = UnitVector::normalized(RawVec2::from_raw(3, 4)).unwrap();
+        let direction = UnitVector::normalized(RawVec2::from_i32(3, 4)).unwrap();
 
         assert_eq!(direction.raw(), [644_245_094, 858_993_459]);
         assert_eq!(direction.scaled_raw(10), [6, 8]);
-        assert_eq!(direction.dot_raw(RawVec2::from_raw(3, 4)), 5);
+        assert_eq!(direction.dot(RawVec2::from_i32(3, 4)), 5);
         assert!(UnitVector::normalized(RawVec2::ZERO).is_none());
     }
 }

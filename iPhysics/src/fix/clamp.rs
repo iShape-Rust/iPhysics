@@ -2,6 +2,20 @@ pub(crate) trait ClampToI32 {
     fn clamp_to_i32(self, min: i32, max: i32) -> i32;
 }
 
+impl ClampToI32 for i32 {
+    #[inline(always)]
+    fn clamp_to_i32(self, min: i32, max: i32) -> i32 {
+        debug_assert!(min <= max);
+        if self < min {
+            min
+        } else if self > max {
+            max
+        } else {
+            self as i32
+        }
+    }
+}
+
 impl ClampToI32 for i64 {
     #[inline(always)]
     fn clamp_to_i32(self, min: i32, max: i32) -> i32 {

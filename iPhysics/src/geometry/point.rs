@@ -1,4 +1,4 @@
-use crate::quantity::Position;
+use crate::quantity::{Position, RawVec2};
 use i_float::int::point::IntPoint;
 
 /// Derived world-space Q16 point using the full signed `i32` range.
@@ -17,7 +17,9 @@ impl GeometryPoint {
     pub const ZERO: Self = Self { x: 0, y: 0 };
 
     #[inline(always)]
-    pub const fn from_raw(x: i32, y: i32) -> Self {
+    pub(crate) const fn from_i32_unchecked(x: i32, y: i32) -> Self {
+        debug_assert!(x >= Position::MIN_POINT && x <= Position::MAX_POINT);
+        debug_assert!(y >= Position::MIN_POINT && y <= Position::MAX_POINT);
         Self { x, y }
     }
 
@@ -25,10 +27,10 @@ impl GeometryPoint {
     /// construction. Debug builds expose a broken invariant; release performs
     /// only the casts and never clamps the geometry.
     #[inline(always)]
-    pub(crate) const fn from_wide_narrow(x: i64, y: i64) -> Self {
-        debug_assert!(x >= i32::MIN as i64 && x <= i32::MAX as i64);
-        debug_assert!(y >= i32::MIN as i64 && y <= i32::MAX as i64);
-        Self::from_raw(x as i32, y as i32)
+    pub(crate) const fn from_i64_unchecked(x: i64, y: i64) -> Self {
+        debug_assert!(x >= Position::MIN_POINT as i64 && x <= Position::MAX_POINT as i64);
+        debug_assert!(y >= Position::MIN_POINT as i64 && y <= Position::MAX_POINT as i64);
+        Self::from_i32_unchecked(x as i32, y as i32)
     }
 
     #[inline(always)]
@@ -52,7 +54,7 @@ impl GeometryPoint {
 
     #[inline(always)]
     pub const fn midpoint(self, other: Self) -> Self {
-        Self::from_raw(
+        Self::from_i32_unchecked(
             ((self.x as i64 + other.x as i64) / 2) as i32,
             ((self.y as i64 + other.y as i64) / 2) as i32,
         )
@@ -75,11 +77,24 @@ impl GeometryPoint {
     }
 }
 
+impl core::ops::Sub for GeometryPoint {
+    type Output = RawVec2;
+
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self::Output {
+        let [x, y] = self.raw();
+        let [rhs_x, rhs_y] = rhs.raw();
+        let dx = x - rhs_x;
+        let dy = y - rhs_y;
+        RawVec2::from_i32(dx, dy)
+    }
+}
+
 impl From<Position> for GeometryPoint {
     #[inline(always)]
     fn from(position: Position) -> Self {
         let [x, y] = position.raw();
-        Self::from_raw(x, y)
+        Self::from_i32_unchecked(x, y)
     }
 }
 
@@ -88,17 +103,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preserves_full_i32_geometry_range() {
-        let point = GeometryPoint::from_wide_narrow(i32::MIN as i64, i32::MAX as i64);
+    fn preserves_bounded_geometry_range() {
+        let point = GeometryPoint::from_i64_unchecked(
+            Position::MIN_POINT as i64,
+            Position::MAX_POINT as i64,
+        );
 
-        assert_eq!(point.raw(), [i32::MIN, i32::MAX]);
+        assert_eq!(point.raw(), [Position::MIN_POINT, Position::MAX_POINT]);
+        assert_eq!(
+            Position::MIN_POINT.checked_add(Position::MIN_POINT),
+            Some(i32::MIN + 2)
+        );
+        assert_eq!(
+            Position::MAX_POINT.checked_add(Position::MAX_POINT),
+            Some(i32::MAX - 1)
+        );
     }
 
     #[test]
-    fn midpoint_widens_before_adding() {
-        let a = GeometryPoint::from_raw(i32::MAX, i32::MAX);
-        let b = GeometryPoint::from_raw(i32::MAX - 2, i32::MIN);
+    fn midpoint_stays_inside_geometry_range() {
+        let a = GeometryPoint::from_i32_unchecked(Position::MAX_POINT, Position::MAX_POINT);
+        let b = GeometryPoint::from_i32_unchecked(Position::MAX_POINT - 2, Position::MIN_POINT);
 
-        assert_eq!(a.midpoint(b).raw(), [i32::MAX - 1, 0]);
+        assert_eq!(a.midpoint(b).raw(), [Position::MAX_POINT - 1, 0]);
     }
 }

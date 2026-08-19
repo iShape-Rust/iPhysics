@@ -1,5 +1,5 @@
 use super::Contact;
-use super::sat::{BestAxis, offset, select_circle_axis, support};
+use super::sat::{BestAxis, offset, support, project};
 use crate::body::BodyId;
 use crate::collider::{Circle, Convex};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -15,7 +15,7 @@ pub(super) fn collide(
     convex_transform: Transform,
 ) -> Option<Contact> {
     let vertices = convex.transformed_vertices(convex_transform);
-    let circle_center = GeometryPoint::from(circle_transform.position);
+    let circle_center = circle_transform.position.into();
     let convex_center = convex.transformed_center(convex_transform);
     let mut best: BestAxis = None;
 
@@ -34,7 +34,7 @@ pub(super) fn collide(
         .iter()
         .copied()
         .min_by_key(|vertex| vertex.squared_distance(circle_center))?;
-    if let Some(axis) = UnitVector::normalized_wide(closest.delta(circle_center)) {
+    if let Some(axis) = (closest - circle_center).normalized() {
         select_circle_axis(
             &mut best,
             axis,
@@ -55,4 +55,27 @@ pub(super) fn collide(
         normal,
         penetration: Length::from_raw(penetration),
     })
+}
+
+pub(super) fn select_circle_axis(
+    best: &mut BestAxis,
+    mut axis: UnitVector,
+    circle_center: GeometryPoint,
+    radius: u32,
+    convex: &[GeometryPoint],
+    convex_center: GeometryPoint,
+) -> Option<()> {
+    if axis.dot(circle_center - convex_center) < 0 {
+        axis = -axis;
+    }
+    let circle_projection = axis.dot_point(circle_center);
+    let min_circle = circle_projection - radius as i64;
+    let max_circle = circle_projection + radius as i64;
+    let (min_convex, max_convex) = project(convex, axis);
+    let overlap = max_circle.min(max_convex) - min_circle.max(min_convex);
+    if overlap < 0 {
+        return None;
+    }
+    crate::collision::sat::update_best(best, overlap, axis);
+    Some(())
 }

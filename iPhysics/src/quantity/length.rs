@@ -13,14 +13,22 @@ impl Length {
     pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
     pub const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
     pub const ZERO: Self = Self(0);
+    pub const MAX_LENGTH: u32 = (1 << 29) - 1;
+
     #[inline(always)]
     pub const fn from_raw(raw: u32) -> Self {
+        debug_assert!(raw <= Self::MAX_LENGTH);
         Self(raw)
     }
 
     #[inline]
     pub fn from_meters(value: f64) -> Option<Self> {
-        Some(Self(value.quantize(Self::FRACTION_BITS)?))
+        let quant: u32 = value.quantize(Self::FRACTION_BITS)?;
+        if quant > Self::MAX_LENGTH {
+            None
+        } else {
+            Some(Self(quant))
+        }
     }
 
     #[inline(always)]

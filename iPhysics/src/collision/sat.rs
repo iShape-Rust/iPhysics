@@ -23,38 +23,15 @@ pub(super) fn select_axis(
     Some(())
 }
 
-pub(super) fn select_circle_axis(
-    best: &mut BestAxis,
-    mut axis: UnitVector,
-    circle_center: GeometryPoint,
-    radius: u32,
-    convex: &[GeometryPoint],
-    convex_center: GeometryPoint,
-) -> Option<()> {
-    if dot_delta(circle_center, convex_center, axis) < 0 {
-        axis = -axis;
-    }
-    let circle_projection = dot(circle_center, axis);
-    let min_circle = circle_projection - radius as i64;
-    let max_circle = circle_projection + radius as i64;
-    let (min_convex, max_convex) = project(convex, axis);
-    let overlap = max_circle.min(max_convex) - min_circle.max(min_convex);
-    if overlap < 0 {
-        return None;
-    }
-    update_best(best, overlap, axis);
-    Some(())
-}
-
 pub(super) fn support(
     vertices: &[GeometryPoint],
     axis: UnitVector,
     maximum: bool,
 ) -> GeometryPoint {
     let mut result = vertices[0];
-    let mut best = dot(result, axis);
+    let mut best = axis.dot_point(result);
     for vertex in &vertices[1..] {
-        let projection = dot(*vertex, axis);
+        let projection = axis.dot_point(*vertex);
         if (maximum && projection > best) || (!maximum && projection < best) {
             result = *vertex;
             best = projection;
@@ -66,23 +43,23 @@ pub(super) fn support(
 pub(super) fn offset(point: GeometryPoint, axis: UnitVector, distance: i32) -> GeometryPoint {
     let [x, y] = point.raw();
     let [offset_x, offset_y] = axis.scaled_raw(distance);
-    GeometryPoint::from_wide_narrow(x as i64 + offset_x, y as i64 + offset_y)
+    GeometryPoint::from_i64_unchecked(x as i64 + offset_x, y as i64 + offset_y)
 }
 
 #[inline]
-fn update_best(best: &mut BestAxis, overlap: i64, axis: UnitVector) {
+pub(super) fn update_best(best: &mut BestAxis, overlap: i64, axis: UnitVector) {
     let overlap = overlap as u32;
     if best.is_none_or(|(current, _)| overlap < current) {
         *best = Some((overlap, axis));
     }
 }
 
-fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
-    let first = dot(vertices[0], axis);
+pub(super) fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
+    let first = axis.dot_point(vertices[0]);
     let mut min = first;
     let mut max = first;
     for vertex in &vertices[1..] {
-        let projection = dot(*vertex, axis);
+        let projection = axis.dot_point(*vertex);
         min = min.min(projection);
         max = max.max(projection);
     }
@@ -90,12 +67,7 @@ fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
 }
 
 #[inline(always)]
-fn dot(point: GeometryPoint, axis: UnitVector) -> i64 {
-    let [x, y] = point.raw();
-    axis.dot_wide_raw([x as i64, y as i64])
-}
-
-#[inline(always)]
 fn dot_delta(a: GeometryPoint, b: GeometryPoint, axis: UnitVector) -> i64 {
     axis.dot_wide_raw(b.delta(a))
 }
+

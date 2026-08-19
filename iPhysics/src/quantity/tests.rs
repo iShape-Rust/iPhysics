@@ -7,11 +7,11 @@ use super::{
 
 #[test]
 fn expected_values_fit_the_formats() {
-    let position = Position::from_meters(10_000.0, -10_000.0).unwrap();
+    let position = Position::from_meters(8_000.0, -8_000.0).unwrap();
     let velocity = LinearVelocity::from_meters_per_second(100.0, -100.0).unwrap();
     let acceleration = LinearAcceleration::from_meters_per_second_squared(100.0, -100.0).unwrap();
 
-    assert_eq!(position.raw(), [655_360_000, -655_360_000]);
+    assert_eq!(position.raw(), [524_288_000, -524_288_000]);
     assert_eq!(velocity.raw(), [1_677_721_600, -1_677_721_600]);
     assert_eq!(acceleration.raw(), velocity.raw());
 }
@@ -67,10 +67,10 @@ fn rounds_small_motion_symmetrically() {
 
 #[test]
 fn integration_saturates_at_world_boundary() {
-    let position = Position::from_raw(i32::MAX, 0);
+    let position = Position::from_i32(i32::MAX, 0);
     let velocity = LinearVelocity::from_meters_per_second(1.0, 0.0).unwrap();
 
-    assert_eq!(position.advance(velocity).raw()[0], Position::MAX_RAW);
+    assert_eq!(position.advance(velocity).raw()[0], Position::MAX_POS);
 }
 
 #[test]

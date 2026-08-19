@@ -13,7 +13,7 @@ pub struct Circle {
 impl Circle {
     #[inline]
     pub const fn new(radius: Length) -> Option<Self> {
-        if radius.raw() == 0 || radius.raw() > Position::MAX_RAW as u32 {
+        if radius.raw() == 0 || radius.raw() > Position::MAX_POS as u32 {
             None
         } else {
             Some(Self { radius })
@@ -45,17 +45,17 @@ mod tests {
 
     #[test]
     fn radius_respects_world_limit() {
-        assert!(Circle::new(Length::from_raw(Position::MAX_RAW as u32)).is_some());
-        assert!(Circle::new(Length::from_raw(Position::MAX_RAW as u32 + 1)).is_none());
+        assert!(Circle::new(Length::ZERO).is_none());
+        assert!(Circle::new(Length::from_raw(Position::MAX_POS as u32)).is_some());
     }
 
     #[test]
     fn aabb_can_extend_beyond_position_range() {
-        let circle = Circle::new(Length::from_raw(Position::MAX_RAW as u32)).unwrap();
-        let center = Position::from_raw(Position::MAX_RAW, Position::MAX_RAW);
+        let circle = Circle::new(Length::from_raw(Position::MAX_POS as u32)).unwrap();
+        let center = Position::from_i32(Position::MAX_POS, Position::MAX_POS);
         let aabb = circle.aabb(center);
 
-        assert_eq!(aabb.max().raw()[0], i32::MAX - 1);
-        assert!(aabb.max().raw()[0] > Position::MAX_RAW);
+        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POS);
+        assert!(aabb.max().raw()[0] > Position::MAX_POS);
     }
 }

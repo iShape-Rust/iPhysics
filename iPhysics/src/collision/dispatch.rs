@@ -41,10 +41,10 @@ mod tests {
 
     fn square() -> Convex {
         Convex::new(&[
-            Position::from_raw(-65_536, -65_536),
-            Position::from_raw(65_536, -65_536),
-            Position::from_raw(65_536, 65_536),
-            Position::from_raw(-65_536, 65_536),
+            Position::from_i32(-65_536, -65_536),
+            Position::from_i32(65_536, -65_536),
+            Position::from_i32(65_536, 65_536),
+            Position::from_i32(-65_536, 65_536),
         ])
         .unwrap()
     }

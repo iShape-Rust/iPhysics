@@ -76,7 +76,7 @@ impl Convex {
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
-            normals[i] = UnitVector::normalized(RawVec2::from_raw_unchecked(edge_y, -edge_x))
+            normals[i] = UnitVector::normalized(RawVec2::from_i32(edge_y, -edge_x))
                 .expect("validated convex edges are non-zero");
         }
 
@@ -130,8 +130,8 @@ impl Convex {
             let [x, y] = point.raw();
             let [min_x, min_y] = min.raw();
             let [max_x, max_y] = max.raw();
-            min = GeometryPoint::from_raw(min_x.min(x), min_y.min(y));
-            max = GeometryPoint::from_raw(max_x.max(x), max_y.max(y));
+            min = GeometryPoint::from_i32_unchecked(min_x.min(x), min_y.min(y));
+            max = GeometryPoint::from_i32_unchecked(max_x.max(x), max_y.max(y));
         }
         Aabb::from_points(min, max)
     }
@@ -183,7 +183,7 @@ fn validate_vertices(vertices: &[Position]) -> Result<i8, ConvexError> {
         return Err(ConvexError::TooManyVertices);
     }
 
-    let max_radius = Position::MAX_RAW as u64;
+    let max_radius = Position::MAX_POS as u64;
     let max_squared_radius = max_radius * max_radius;
     if vertices
         .iter()
@@ -266,7 +266,7 @@ fn center_of_mass(vertices: &[Position]) -> Position {
 
     debug_assert!(area2 > 0);
     let denominator = 3 * area2 as i128;
-    Position::from_raw_unchecked(
+    Position::from_i32_unchecked(
         div_round(center_x, denominator) as i32,
         div_round(center_y, denominator) as i32,
     )
@@ -322,10 +322,10 @@ mod tests {
     #[test]
     fn canonicalizes_clockwise_vertices() {
         let vertices = [
-            Position::from_raw(-10, -10),
-            Position::from_raw(-10, 10),
-            Position::from_raw(10, 10),
-            Position::from_raw(10, -10),
+            Position::from_i32(-10, -10),
+            Position::from_i32(-10, 10),
+            Position::from_i32(10, 10),
+            Position::from_i32(10, -10),
         ];
         let convex = Convex::new(&vertices).unwrap();
 
@@ -341,22 +341,22 @@ mod tests {
     #[should_panic(expected = "Convex::new_unchecked requires a valid strict convex")]
     fn unchecked_constructor_validates_in_debug_builds() {
         let _ = Convex::new_unchecked(&[
-            Position::from_raw(0, 0),
-            Position::from_raw(10, 0),
-            Position::from_raw(5, 5),
-            Position::from_raw(10, 10),
-            Position::from_raw(0, 10),
+            Position::from_i32(0, 0),
+            Position::from_i32(10, 0),
+            Position::from_i32(5, 5),
+            Position::from_i32(10, 10),
+            Position::from_i32(0, 10),
         ]);
     }
 
     #[test]
     fn rejects_concave_polygon() {
         let result = Convex::new(&[
-            Position::from_raw(0, 0),
-            Position::from_raw(10, 0),
-            Position::from_raw(5, 5),
-            Position::from_raw(10, 10),
-            Position::from_raw(0, 10),
+            Position::from_i32(0, 0),
+            Position::from_i32(10, 0),
+            Position::from_i32(5, 5),
+            Position::from_i32(10, 10),
+            Position::from_i32(0, 10),
         ]);
 
         assert_eq!(result, Err(ConvexError::NotConvex));
@@ -365,17 +365,17 @@ mod tests {
     #[test]
     fn cyclic_permutations_have_identical_storage() {
         let a = Convex::new(&[
-            Position::from_raw(-10, -10),
-            Position::from_raw(10, -10),
-            Position::from_raw(10, 10),
-            Position::from_raw(-10, 10),
+            Position::from_i32(-10, -10),
+            Position::from_i32(10, -10),
+            Position::from_i32(10, 10),
+            Position::from_i32(-10, 10),
         ])
         .unwrap();
         let b = Convex::new(&[
-            Position::from_raw(10, 10),
-            Position::from_raw(-10, 10),
-            Position::from_raw(-10, -10),
-            Position::from_raw(10, -10),
+            Position::from_i32(10, 10),
+            Position::from_i32(-10, 10),
+            Position::from_i32(-10, -10),
+            Position::from_i32(10, -10),
         ])
         .unwrap();
 
@@ -385,11 +385,11 @@ mod tests {
     #[test]
     fn rejects_self_intersecting_order() {
         let result = Convex::new(&[
-            Position::from_raw(0, 10),
-            Position::from_raw(6, -8),
-            Position::from_raw(-10, 3),
-            Position::from_raw(10, 3),
-            Position::from_raw(-6, -8),
+            Position::from_i32(0, 10),
+            Position::from_i32(6, -8),
+            Position::from_i32(-10, 3),
+            Position::from_i32(10, 3),
+            Position::from_i32(-6, -8),
         ]);
 
         assert_eq!(result, Err(ConvexError::NotConvex));
@@ -398,10 +398,10 @@ mod tests {
     #[test]
     fn rotated_aabb_is_deterministic() {
         let convex = Convex::new(&[
-            Position::from_raw(-20, -10),
-            Position::from_raw(20, -10),
-            Position::from_raw(20, 10),
-            Position::from_raw(-20, 10),
+            Position::from_i32(-20, -10),
+            Position::from_i32(20, -10),
+            Position::from_i32(20, 10),
+            Position::from_i32(-20, 10),
         ])
         .unwrap();
         let aabb = convex.aabb(Transform::new(Position::ZERO, Angle::QUARTER_TURN));
@@ -413,34 +413,34 @@ mod tests {
     #[test]
     fn stores_area_and_uniform_density_center() {
         let convex = Convex::new(&[
-            Position::from_raw(0, 0),
-            Position::from_raw(10, 0),
-            Position::from_raw(1, 10),
-            Position::from_raw(0, 10),
+            Position::from_i32(0, 0),
+            Position::from_i32(10, 0),
+            Position::from_i32(1, 10),
+            Position::from_i32(0, 10),
         ])
         .unwrap();
 
         assert_eq!(convex.doubled_area_raw(), 110);
-        assert_eq!(convex.center(), Position::from_raw(3, 4));
+        assert_eq!(convex.center(), Position::from_i32(3, 4));
     }
 
     #[test]
     fn vertices_must_fit_local_radius_limit() {
-        let max = Position::MAX_RAW;
+        let max = Position::MAX_POS;
         assert_eq!(
             Convex::new(&[
-                Position::from_raw(max, max),
-                Position::from_raw(0, 1),
-                Position::from_raw(1, 0),
+                Position::from_i32(max, max),
+                Position::from_i32(0, 1),
+                Position::from_i32(1, 0),
             ]),
             Err(ConvexError::VertexOutsideLimit)
         );
 
         assert!(
             Convex::new(&[
-                Position::from_raw(max, 0),
-                Position::from_raw(0, 1),
-                Position::from_raw(0, -1),
+                Position::from_i32(max, 0),
+                Position::from_i32(0, 1),
+                Position::from_i32(0, -1),
             ])
             .is_ok()
         );
@@ -448,30 +448,30 @@ mod tests {
 
     #[test]
     fn aabb_can_extend_beyond_position_range() {
-        let max = Position::MAX_RAW;
+        let max = Position::MAX_POS;
         let convex = Convex::new(&[
-            Position::from_raw(max, 0),
-            Position::from_raw(0, 1),
-            Position::from_raw(0, -1),
+            Position::from_i32(max, 0),
+            Position::from_i32(0, 1),
+            Position::from_i32(0, -1),
         ])
         .unwrap();
-        let aabb = convex.aabb(Transform::new(Position::from_raw(max, max), Angle::ZERO));
+        let aabb = convex.aabb(Transform::new(Position::from_i32(max, max), Angle::ZERO));
 
-        assert_eq!(aabb.max().raw()[0], i32::MAX - 1);
-        assert!(aabb.max().raw()[0] > Position::MAX_RAW);
+        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POS);
+        assert!(aabb.max().raw()[0] > Position::MAX_POS);
     }
 
     #[test]
     fn radial_limit_survives_non_cardinal_rotation_at_world_edge() {
-        let max = Position::MAX_RAW;
+        let max = Position::MAX_POS;
         let convex = Convex::new(&[
-            Position::from_raw(max, 0),
-            Position::from_raw(0, 1),
-            Position::from_raw(0, -1),
+            Position::from_i32(max, 0),
+            Position::from_i32(0, 1),
+            Position::from_i32(0, -1),
         ])
         .unwrap();
         let vertices = convex.transformed_vertices(Transform::new(
-            Position::from_raw(max, max),
+            Position::from_i32(max, max),
             Angle::from_raw(0x1234_5678),
         ));
 

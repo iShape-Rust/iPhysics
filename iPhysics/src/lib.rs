@@ -19,7 +19,7 @@ pub use collision::Contact;
 pub use geometry::{Aabb, GeometryPoint, UnitVector};
 pub use quantity::{
     Angle, AngleDelta, AngularAcceleration, AngularVelocity, Length, LinearAcceleration,
-    LinearVelocity, Mass, Position, RawVec2,
+    LinearVelocity, Mass, Position,
 };
 pub use transform::Transform;
 pub use world::{AddBodyError, StepStats, World, WorldSettings};

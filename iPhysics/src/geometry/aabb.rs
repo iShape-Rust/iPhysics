@@ -51,12 +51,12 @@ impl Aabb {
 
     #[inline(always)]
     pub const fn min(self) -> GeometryPoint {
-        GeometryPoint::from_raw(self.0.min_x, self.0.min_y)
+        GeometryPoint::from_i32_unchecked(self.0.min_x, self.0.min_y)
     }
 
     #[inline(always)]
     pub const fn max(self) -> GeometryPoint {
-        GeometryPoint::from_raw(self.0.max_x, self.0.max_y)
+        GeometryPoint::from_i32_unchecked(self.0.max_x, self.0.max_y)
     }
 
     /// Tests overlap including shared borders.
@@ -119,13 +119,13 @@ mod tests {
     #[test]
     fn touching_boundaries_intersect() {
         let a = Aabb::from_min_max(
-            GeometryPoint::from_raw(0, 0),
-            GeometryPoint::from_raw(10, 10),
+            GeometryPoint::from_i32_unchecked(0, 0),
+            GeometryPoint::from_i32_unchecked(10, 10),
         )
         .unwrap();
         let b = Aabb::from_min_max(
-            GeometryPoint::from_raw(10, 4),
-            GeometryPoint::from_raw(20, 6),
+            GeometryPoint::from_i32_unchecked(10, 4),
+            GeometryPoint::from_i32_unchecked(20, 6),
         )
         .unwrap();
 
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn validates_min_and_max() {
         assert!(
-            Aabb::from_min_max(GeometryPoint::from_raw(1, 0), GeometryPoint::from_raw(0, 1))
+            Aabb::from_min_max(GeometryPoint::from_i32_unchecked(1, 0), GeometryPoint::from_i32_unchecked(0, 1))
                 .is_none()
         );
     }
@@ -143,17 +143,17 @@ mod tests {
     #[test]
     fn union_contains_both_boundaries() {
         let a = Aabb::from_points(
-            GeometryPoint::from_raw(-5, 3),
-            GeometryPoint::from_raw(4, 8),
+            GeometryPoint::from_i32_unchecked(-5, 3),
+            GeometryPoint::from_i32_unchecked(4, 8),
         );
         let b = Aabb::from_points(
-            GeometryPoint::from_raw(2, -7),
-            GeometryPoint::from_raw(9, 5),
+            GeometryPoint::from_i32_unchecked(2, -7),
+            GeometryPoint::from_i32_unchecked(9, 5),
         );
         let union = a.union(b);
 
-        assert_eq!(union.min(), GeometryPoint::from_raw(-5, -7));
-        assert_eq!(union.max(), GeometryPoint::from_raw(9, 8));
+        assert_eq!(union.min(), GeometryPoint::from_i32_unchecked(-5, -7));
+        assert_eq!(union.max(), GeometryPoint::from_i32_unchecked(9, 8));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use super::linear_velocity::LinearVelocity;
-use super::raw::RawVec2;
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
-use crate::fix::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
+use crate::fix::{quantize::Quantize, shift::RoundShift};
+use crate::geometry::short::RawVec2;
 use crate::{Angle, GeometryPoint};
 use i_float::int::point::IntPoint;
 
@@ -16,43 +16,48 @@ pub struct Position([i32; 2]);
 impl Position {
     pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
-    pub const MIN_RAW: i32 = -(1 << 30);
-    pub const MAX_RAW: i32 = (1 << 30) - 1;
+    pub const MIN_POS: i32 = -(1 << 29) + 1;
+    pub const MAX_POS: i32 = (1 << 29) - 1;
+    pub const MIN_POINT: i32 = -(1 << 30) + 1;
+    pub const MAX_POINT: i32 = (1 << 30) - 1;
+
     pub const ZERO: Self = Self([0, 0]);
 
     #[inline(always)]
-    pub const fn from_raw(x: i32, y: i32) -> Self {
-        Self([clamp_raw(x), clamp_raw(y)])
+    pub fn from_i32(x: i32, y: i32) -> Self {
+        let x = x.clamp(Position::MIN_POS, Position::MAX_POS);
+        let y = y.clamp(Position::MIN_POS, Position::MAX_POS);
+        Self([x, y])
+    }
+
+    #[inline(always)]
+    pub fn from_i64(x: i64, y: i64) -> Self {
+        let x = x.clamp(Position::MIN_POS as i64, Position::MAX_POS as i64);
+        let y = y.clamp(Position::MIN_POS as i64, Position::MAX_POS as i64);
+        Self([x as i32, y as i32])
+    }
+
+    #[inline(always)]
+    pub fn from_i128(x: i128, y: i128) -> Self {
+        let x = x.clamp(Position::MIN_POS as i128, Position::MAX_POS as i128);
+        let y = y.clamp(Position::MIN_POS as i128, Position::MAX_POS as i128);
+        Self([x as i32, y as i32])
     }
 
     /// Creates a position when the caller has already proved the world-range
     /// invariant. No validation or saturation is performed.
     #[inline(always)]
-    pub(crate) const fn from_raw_unchecked(x: i32, y: i32) -> Self {
+    pub(crate) const fn from_i32_unchecked(x: i32, y: i32) -> Self {
+        debug_assert!(x >= Self::MIN_POS && x <= Self::MAX_POS);
+        debug_assert!(y >= Self::MIN_POS && y <= Self::MAX_POS);
         Self([x, y])
-    }
-
-    /// Creates a position from a wide simulation result, saturating at the
-    /// representable world boundary instead of wrapping or failing the tick.
-    #[inline(always)]
-    pub(crate) fn from_wide_saturated(x: i128, y: i128) -> Self {
-        Self([
-            x.clamp_to_i32(Self::MIN_RAW, Self::MAX_RAW),
-            y.clamp_to_i32(Self::MIN_RAW, Self::MAX_RAW),
-        ])
-    }
-
-    #[inline(always)]
-    pub(crate) fn from_i64_saturated(x: i64, y: i64) -> Self {
-        Self([
-            x.clamp_to_i32(Self::MIN_RAW, Self::MAX_RAW),
-            y.clamp_to_i32(Self::MIN_RAW, Self::MAX_RAW),
-        ])
     }
 
     #[inline(always)]
     pub const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
-        if is_valid_raw(x) && is_valid_raw(y) {
+        let is_x = x >= Self::MIN_POS && x <= Self::MAX_POS;
+        let is_y = y >= Self::MIN_POS && y <= Self::MAX_POS;
+        if is_x && is_y {
             Some(Self([x, y]))
         } else {
             None
@@ -83,12 +88,6 @@ impl Position {
         IntPoint { x, y }
     }
 
-    /// Creates a position from raw Q16 `i_float` coordinates.
-    #[inline(always)]
-    pub const fn from_raw_point(point: IntPoint<i32>) -> Self {
-        Self::from_raw(point.x, point.y)
-    }
-
     #[inline(always)]
     pub fn to_meters(self) -> [f64; 2] {
         let scale = Self::SCALE as f64;
@@ -100,7 +99,7 @@ impl Position {
     pub fn advance(self, velocity: LinearVelocity) -> Self {
         let [x, y] = self.raw();
         let [vx, vy] = velocity.raw();
-        Self::from_i64_saturated(
+        Self::from_i64(
             x as i64 + (vx as i64).round_shift(VELOCITY_TO_POSITION_SHIFT),
             y as i64 + (vy as i64).round_shift(VELOCITY_TO_POSITION_SHIFT),
         )
@@ -112,10 +111,7 @@ impl Position {
     pub const fn midpoint(self, other: Self) -> Self {
         let [ax, ay] = self.raw();
         let [bx, by] = other.raw();
-        Self::from_raw_unchecked(
-            ((ax as i64 + bx as i64) / 2) as i32,
-            ((ay as i64 + by as i64) / 2) as i32,
-        )
+        Self::from_i32_unchecked((ax + bx) / 2, (ay + by) / 2)
     }
 
     /// Returns the squared raw Q16 distance. The result has 32 fractional
@@ -126,11 +122,11 @@ impl Position {
     }
 
     #[inline(always)]
-    pub(crate) fn saturating_add(self, point: GeometryPoint) -> Self {
+    pub(crate) fn add_point(self, point: GeometryPoint) -> Self {
         let [ax, ay] = self.raw();
         let [bx, by] = point.raw();
 
-        Self::from_i64_saturated(ax as i64 + bx as i64, ay as i64 + by as i64)
+        Self::from_i32_unchecked(ax + bx, ay + by)
     }
 
     #[inline(always)]
@@ -138,7 +134,7 @@ impl Position {
         let [ax, ay] = self.raw();
         let [bx, by] = point.raw();
 
-        GeometryPoint::from_raw(ax + bx, ay + by)
+        GeometryPoint::from_i32_unchecked(ax + bx, ay + by)
     }
 
     #[inline(always)]
@@ -149,7 +145,7 @@ impl Position {
         let x = (px as i64 * cos as i64 - py as i64 * sin as i64).round_shift(30);
         let y = (px as i64 * sin as i64 + py as i64 * cos as i64).round_shift(30);
 
-        GeometryPoint::from_raw(x as i32, y as i32)
+        GeometryPoint::from_i32_unchecked(x as i32, y as i32)
     }
 }
 
@@ -161,25 +157,9 @@ impl core::ops::Sub for Position {
     fn sub(self, rhs: Self) -> Self::Output {
         let [x, y] = self.raw();
         let [rhs_x, rhs_y] = rhs.raw();
-        let dx = x as i64 - rhs_x as i64;
-        let dy = y as i64 - rhs_y as i64;
-        RawVec2::from_raw_unchecked(dx as i32, dy as i32)
-    }
-}
-
-#[inline(always)]
-const fn is_valid_raw(value: i32) -> bool {
-    value >= Position::MIN_RAW && value <= Position::MAX_RAW
-}
-
-#[inline(always)]
-const fn clamp_raw(value: i32) -> i32 {
-    if value < Position::MIN_RAW {
-        Position::MIN_RAW
-    } else if value > Position::MAX_RAW {
-        Position::MAX_RAW
-    } else {
-        value
+        let dx = x - rhs_x;
+        let dy = y - rhs_y;
+        RawVec2::from_i32(dx, dy)
     }
 }
 
@@ -193,7 +173,7 @@ impl From<Position> for IntPoint<i32> {
 impl From<IntPoint<i32>> for Position {
     #[inline(always)]
     fn from(point: IntPoint<i32>) -> Self {
-        Self::from_raw_point(point)
+        Self::from_i32(point.x, point.y)
     }
 }
 
@@ -202,34 +182,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subtraction_widens_before_operating() {
-        let max = Position::from_raw(i32::MAX, i32::MIN);
-        let min = Position::from_raw(i32::MIN, i32::MAX);
+    fn subtraction_stays_inside_raw_vector_range() {
+        let max = Position::from_i32(i32::MAX, i32::MIN);
+        let min = Position::from_i32(i32::MIN, i32::MAX);
 
-        assert_eq!((max - min).raw(), [i32::MAX, -i32::MAX]);
+        assert_eq!(
+            (max - min).raw(),
+            [2 * Position::MAX_POS, -2 * Position::MAX_POS]
+        );
     }
 
     #[test]
     fn raw_constructor_clamps_to_world_boundary() {
         assert_eq!(
-            Position::from_raw(i32::MIN, i32::MAX).raw(),
-            [Position::MIN_RAW, Position::MAX_RAW]
+            Position::from_i32(i32::MIN, i32::MAX).raw(),
+            [Position::MIN_POS, Position::MAX_POS]
         );
-        assert!(Position::checked_from_raw(Position::MIN_RAW, Position::MAX_RAW).is_some());
-        assert!(Position::checked_from_raw(Position::MIN_RAW - 1, 0).is_none());
+        assert!(Position::checked_from_raw(Position::MIN_POS, Position::MAX_POS).is_some());
+        assert!(Position::checked_from_raw(Position::MIN_POS - 1, 0).is_none());
     }
 
     #[test]
-    fn midpoint_widens_and_stays_in_world() {
-        let min = Position::from_raw(Position::MIN_RAW, Position::MIN_RAW);
-        let max = Position::from_raw(Position::MAX_RAW, Position::MAX_RAW);
+    fn midpoint_stays_in_world() {
+        let min = Position::from_i32(Position::MIN_POS, Position::MIN_POS);
+        let max = Position::from_i32(Position::MAX_POS, Position::MAX_POS);
 
         assert_eq!(min.midpoint(max), Position::ZERO);
     }
 
     #[test]
     fn squared_distance_uses_bounded_difference() {
-        let a = Position::from_raw(3, 4);
+        let a = Position::from_i32(3, 4);
 
         assert_eq!(a.squared_distance(Position::ZERO), 25);
     }
