@@ -29,11 +29,11 @@ pub(super) fn support(
     maximum: bool,
 ) -> GeometryPoint {
     let mut result = vertices[0];
-    let mut best = axis.dot_point(result);
-    for vertex in &vertices[1..] {
-        let projection = axis.dot_point(*vertex);
+    let mut best = axis.dot(result.into());
+    for &vertex in &vertices[1..] {
+        let projection = axis.dot(vertex.into());
         if (maximum && projection > best) || (!maximum && projection < best) {
-            result = *vertex;
+            result = vertex;
             best = projection;
         }
     }
@@ -55,11 +55,11 @@ pub(super) fn update_best(best: &mut BestAxis, overlap: i64, axis: UnitVector) {
 }
 
 pub(super) fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
-    let first = axis.dot_point(vertices[0]);
+    let first = axis.dot(vertices[0].into());
     let mut min = first;
     let mut max = first;
-    for vertex in &vertices[1..] {
-        let projection = axis.dot_point(*vertex);
+    for &vertex in &vertices[1..] {
+        let projection = axis.dot(vertex.into());
         min = min.min(projection);
         max = max.max(projection);
     }

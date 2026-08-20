@@ -19,10 +19,10 @@ pub(super) fn collide(
     let convex_center = convex.transformed_center(convex_transform);
     let mut best: BestAxis = None;
 
-    for index in 0..convex.len() {
+    for normal in convex.normals() {
         select_circle_axis(
             &mut best,
-            convex.transformed_normal(index, convex_transform),
+            normal.rotate(convex_transform.angle),
             circle_center,
             circle.radius().raw(),
             &vertices,
@@ -68,7 +68,7 @@ pub(super) fn select_circle_axis(
     if axis.dot(circle_center - convex_center) < 0 {
         axis = -axis;
     }
-    let circle_projection = axis.dot_point(circle_center);
+    let circle_projection = axis.dot(circle_center.into());
     let min_circle = circle_projection - radius as i64;
     let max_circle = circle_projection + radius as i64;
     let (min_convex, max_convex) = project(convex, axis);

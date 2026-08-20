@@ -102,6 +102,11 @@ impl Convex {
         &self.vertices[..self.count as usize]
     }
 
+    #[inline(always)]
+    pub(crate) fn normals(&self) -> &[UnitVector] {
+        &self.normals[..self.count as usize]
+    }
+
     /// Local center of mass for a polygon with uniform density.
     #[cfg(test)]
     #[inline(always)]
@@ -144,10 +149,6 @@ impl Convex {
             result.vertices[index] = transform.apply_geometry(vertex);
         }
         result
-    }
-
-    pub(crate) fn transformed_normal(self, index: usize, transform: Transform) -> UnitVector {
-        self.normals[index].rotate(transform.angle)
     }
 
     #[inline(always)]

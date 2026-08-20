@@ -1,6 +1,6 @@
 use crate::fix::shift::RoundShift;
 use crate::quantity::RawVec2;
-use crate::{Angle, GeometryPoint};
+use crate::Angle;
 
 /// Dimensionless normalized direction stored as signed Q30 components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,11 +43,6 @@ impl UnitVector {
             vector.dot(RawVec2::from_i32(self.x, self.y)),
             Self::FRACTION_BITS,
         )
-    }
-
-    #[inline(always)]
-    pub(crate) fn dot_point(self, point: GeometryPoint) -> i64 {
-        self.dot(point.into())
     }
 
     /// Scales this direction by a bounded raw magnitude.

@@ -19,20 +19,20 @@ pub(super) fn collide(
     let center_b = convex_b.transformed_center(transform_b);
     let mut best: BestAxis = None;
 
-    for index in 0..convex_a.len() {
+    for normal in convex_a.normals() {
         select_axis(
             &mut best,
-            convex_a.transformed_normal(index, transform_a),
+            normal.rotate(transform_a.angle),
             &vertices_a,
             &vertices_b,
             center_a,
             center_b,
         )?;
     }
-    for index in 0..convex_b.len() {
+    for normal in convex_b.normals() {
         select_axis(
             &mut best,
-            convex_b.transformed_normal(index, transform_b),
+            normal.rotate(transform_b.angle),
             &vertices_a,
             &vertices_b,
             center_a,

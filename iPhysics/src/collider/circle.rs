@@ -28,16 +28,10 @@ impl Circle {
     #[inline]
     pub(crate) fn aabb(self, center: Position) -> Aabb {
         let [x, y] = center.raw();
-        let r = self.radius.raw() as i64;
-        let min_x = x as i64 - r;
-        let max_x = x as i64 + r;
-        let min_y = y as i64 - r;
-        let max_y = y as i64 + r;
-        debug_assert!(min_x >= Position::MIN_POINT as i64);
-        debug_assert!(min_y >= Position::MIN_POINT as i64);
-        debug_assert!(max_x <= Position::MAX_POINT as i64);
-        debug_assert!(max_y <= Position::MAX_POINT as i64);
-        Aabb::from_raw_unchecked(min_x as i32, max_x as i32, min_y as i32, max_y as i32)
+        // Center coordinates and radius are bounded by 2^29 - 1, so their
+        // sums and differences are bounded by 2^30 - 2 and fit in i32.
+        let r = self.radius.raw() as i32;
+        Aabb::from_raw_unchecked(x - r, x + r, y - r, y + r)
     }
 }
 
