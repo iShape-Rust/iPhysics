@@ -4,22 +4,23 @@ pub(super) type BestAxis = Option<(u32, UnitVector)>;
 
 pub(super) fn select_axis(
     best: &mut BestAxis,
-    mut axis: UnitVector,
+    axis: UnitVector,
     a: &[GeometryPoint],
     b: &[GeometryPoint],
-    center_a: GeometryPoint,
-    center_b: GeometryPoint,
 ) -> Option<()> {
-    if axis.dot(center_b - center_a) < 0 {
-        axis = -axis;
-    }
     let (min_a, max_a) = project(a, axis);
     let (min_b, max_b) = project(b, axis);
-    let overlap = max_a.min(max_b) - min_a.max(min_b);
-    if overlap < 0 {
+    let move_a_negative = max_a - min_b;
+    let move_a_positive = max_b - min_a;
+    if move_a_negative < 0 || move_a_positive < 0 {
         return None;
     }
-    update_best(best, overlap, axis);
+
+    if move_a_negative <= move_a_positive {
+        update_best(best, move_a_negative, axis);
+    } else {
+        update_best(best, move_a_positive, -axis);
+    }
     Some(())
 }
 
@@ -47,10 +48,10 @@ pub(super) fn offset(point: GeometryPoint, axis: UnitVector, distance: i32) -> G
 }
 
 #[inline]
-pub(super) fn update_best(best: &mut BestAxis, overlap: i64, axis: UnitVector) {
-    let overlap = overlap as u32;
-    if best.is_none_or(|(current, _)| overlap < current) {
-        *best = Some((overlap, axis));
+pub(super) fn update_best(best: &mut BestAxis, penetration: i64, axis: UnitVector) {
+    let penetration = penetration as u32;
+    if best.is_none_or(|(current, _)| penetration < current) {
+        *best = Some((penetration, axis));
     }
 }
 

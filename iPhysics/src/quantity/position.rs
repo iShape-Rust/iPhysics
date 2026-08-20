@@ -52,6 +52,7 @@ impl Position {
 
     /// Creates a position when the caller has already proved the world-range
     /// invariant. No validation or saturation is performed.
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) const fn from_i32_unchecked(x: i32, y: i32) -> Self {
         debug_assert!(x >= Self::MIN_POSITION && x <= Self::MAX_POSITION);

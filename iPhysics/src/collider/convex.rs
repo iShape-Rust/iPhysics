@@ -24,7 +24,6 @@ pub enum ConvexError {
 pub struct Convex {
     vertices: [Position; MAX_CONVEX_VERTICES],
     normals: [UnitVector; MAX_CONVEX_VERTICES],
-    center: Position,
     count: u8,
 }
 
@@ -39,7 +38,7 @@ impl Convex {
     /// [`Self::new`]. The preconditions are verified in debug builds only.
     ///
     /// The vertices may use either winding and any cyclic starting point; the
-    /// result is still canonicalized before its center and normals are built.
+    /// result is still canonicalized before its normals are built.
     #[cfg(test)]
     #[inline(always)]
     fn new_unchecked(vertices: &[Position]) -> Self {
@@ -70,8 +69,6 @@ impl Convex {
             .expect("a convex always has at least three vertices");
         storage[..count].rotate_left(first);
 
-        let center = center_of_mass(&storage[..count]);
-
         let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
@@ -82,7 +79,6 @@ impl Convex {
         Self {
             vertices: storage,
             normals,
-            center,
             count: count as u8,
         }
     }
@@ -105,22 +101,6 @@ impl Convex {
     #[inline(always)]
     pub(crate) fn normals(&self) -> &[UnitVector] {
         &self.normals[..self.count as usize]
-    }
-
-    /// Local center of mass for a polygon with uniform density.
-    #[cfg(test)]
-    #[inline(always)]
-    const fn center(self) -> Position {
-        self.center
-    }
-
-    /// Twice the polygon area in raw Q32 square-metre units.
-    ///
-    /// Area is not part of the per-tick collision path, so it is computed on
-    /// demand instead of increasing every convex collider's storage.
-    #[cfg(test)]
-    fn doubled_area_raw(&self) -> u64 {
-        doubled_area(self.vertices())
     }
 
     pub(crate) fn aabb(self, transform: Transform) -> Aabb {
@@ -149,11 +129,6 @@ impl Convex {
             result.vertices[index] = transform.apply_geometry(vertex);
         }
         result
-    }
-
-    #[inline(always)]
-    pub(crate) fn transformed_center(self, transform: Transform) -> GeometryPoint {
-        transform.apply_geometry(self.center)
     }
 }
 
@@ -242,75 +217,6 @@ fn validate_vertices(vertices: &[Position]) -> Result<i8, ConvexError> {
 fn winding_unchecked(vertices: &[Position]) -> i8 {
     let cross = (vertices[1] - vertices[0]).cross(vertices[2] - vertices[1]);
     if cross < 0 { -1 } else { 1 }
-}
-
-/// Computes the uniform-density center of mass in one traversal. Vertices are
-/// already canonicalized counter-clockwise.
-fn center_of_mass(vertices: &[Position]) -> Position {
-    let mut area2 = 0_i64;
-    let mut center_x = 0_i128;
-    let mut center_y = 0_i128;
-
-    for edge in vertices.windows(2) {
-        accumulate_edge(edge[0], edge[1], &mut area2, &mut center_x, &mut center_y);
-    }
-    accumulate_edge(
-        vertices[vertices.len() - 1],
-        vertices[0],
-        &mut area2,
-        &mut center_x,
-        &mut center_y,
-    );
-
-    debug_assert!(area2 > 0);
-    let denominator = 3 * area2 as i128;
-    Position::from_i32_unchecked(
-        div_round(center_x, denominator) as i32,
-        div_round(center_y, denominator) as i32,
-    )
-}
-
-#[cfg(test)]
-fn doubled_area(vertices: &[Position]) -> u64 {
-    let mut area2 = 0_i64;
-    for edge in vertices.windows(2) {
-        area2 = area2.wrapping_add(edge_cross_raw(edge[0], edge[1]));
-    }
-    area2 = area2.wrapping_add(edge_cross_raw(vertices[vertices.len() - 1], vertices[0]));
-    area2 as u64
-}
-
-#[inline(always)]
-fn accumulate_edge(
-    a: Position,
-    b: Position,
-    area2: &mut i64,
-    center_x: &mut i128,
-    center_y: &mut i128,
-) {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    let cross = edge_cross_raw(a, b);
-    *area2 = area2.wrapping_add(cross);
-    *center_x += (ax + bx) as i128 * cross as i128;
-    *center_y += (ay + by) as i128 * cross as i128;
-}
-
-#[inline(always)]
-fn edge_cross_raw(a: Position, b: Position) -> i64 {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    ax as i64 * by as i64 - ay as i64 * bx as i64
-}
-
-#[inline(always)]
-fn div_round(numerator: i128, denominator: i128) -> i128 {
-    let half = denominator / 2;
-    if numerator < 0 {
-        -((-numerator + half) / denominator)
-    } else {
-        (numerator + half) / denominator
-    }
 }
 
 #[cfg(test)]
@@ -407,20 +313,6 @@ mod tests {
 
         assert_eq!(aabb.min().raw(), [-10, -20]);
         assert_eq!(aabb.max().raw(), [10, 20]);
-    }
-
-    #[test]
-    fn stores_area_and_uniform_density_center() {
-        let convex = Convex::new(&[
-            Position::from_i32(0, 0),
-            Position::from_i32(10, 0),
-            Position::from_i32(1, 10),
-            Position::from_i32(0, 10),
-        ])
-        .unwrap();
-
-        assert_eq!(convex.doubled_area_raw(), 110);
-        assert_eq!(convex.center(), Position::from_i32(3, 4));
     }
 
     #[test]

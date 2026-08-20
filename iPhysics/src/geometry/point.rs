@@ -57,6 +57,7 @@ impl GeometryPoint {
         Self::from_i32_unchecked((self.x + other.x) / 2, (self.y + other.y) / 2)
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn squared_distance(self, other: Self) -> u64 {
         (self - other).squared_magnitude()
