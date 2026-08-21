@@ -27,6 +27,8 @@ struct ContactImpulseState {
     // numerators avoids introducing another stored fixed-point format.
     normal_velocity_change_q10: u64,
     tangent_velocity_change_q10: i64,
+    normal_target_speed_q10: u64,
+    normal_initialized: bool,
 }
 
 impl World {
@@ -37,8 +39,8 @@ impl World {
         self.wake_impacted_bodies();
 
         let mut impulse_states = vec![ContactImpulseState::default(); self.contacts.len()];
-        for _ in 0..self.settings.velocity_iterations.max(1) {
-            self.solve_velocities(&mut impulse_states);
+        for iteration in 0..self.settings.velocity_iterations.max(1) {
+            self.solve_velocities(&mut impulse_states, iteration % 2 != 0);
         }
         self.correct_positions();
         self.integrate_transforms();
@@ -97,7 +99,7 @@ impl World {
                 }
                 stats.aabb_pairs += 1;
 
-                if let Some(contact) = collide(
+                if let Some(manifold) = collide(
                     a.id(),
                     a.collider(),
                     a.state().transform(),
@@ -105,11 +107,14 @@ impl World {
                     b.collider(),
                     b.state().transform(),
                 ) {
-                    self.contacts.push(contact);
-                    self.contact_pairs.push(ContactPair {
-                        a: index_a,
-                        b: ContactBodyIndex::Dynamic(index_b),
-                    });
+                    for (point_index, contact) in manifold.into_contacts().enumerate() {
+                        self.contacts.push(contact);
+                        self.contact_pairs.push(ContactPair {
+                            a: index_a,
+                            b: ContactBodyIndex::Dynamic(index_b),
+                            correct_position: point_index == 0,
+                        });
+                    }
                 }
             }
 
@@ -131,7 +136,7 @@ impl World {
                     }
                     stats.aabb_pairs += 1;
 
-                    if let Some(contact) = collide(
+                    if let Some(manifold) = collide(
                         a.id(),
                         a.collider(),
                         a.state().transform(),
@@ -139,11 +144,14 @@ impl World {
                         part.collider(),
                         part_transform,
                     ) {
-                        self.contacts.push(contact);
-                        self.contact_pairs.push(ContactPair {
-                            a: index_a,
-                            b: ContactBodyIndex::Static(static_index),
-                        });
+                        for (point_index, contact) in manifold.into_contacts().enumerate() {
+                            self.contacts.push(contact);
+                            self.contact_pairs.push(ContactPair {
+                                a: index_a,
+                                b: ContactBodyIndex::Static(static_index),
+                                correct_position: point_index == 0,
+                            });
+                        }
                     }
                 }
             }
@@ -184,47 +192,57 @@ impl World {
         }
     }
 
-    fn solve_velocities(&mut self, impulse_states: &mut [ContactImpulseState]) {
+    fn solve_velocities(&mut self, impulse_states: &mut [ContactImpulseState], reverse: bool) {
         debug_assert_eq!(impulse_states.len(), self.contacts.len());
 
-        for ((contact, pair), impulse_state) in self
-            .contacts
-            .iter()
-            .zip(self.contact_pairs.iter().copied())
-            .zip(impulse_states.iter_mut())
-        {
-            match pair.b {
-                ContactBodyIndex::Static(static_index) => {
-                    let material_a = self.bodies[pair.a].material();
-                    let material_b = self.static_bodies[static_index].material();
-                    solve_contact_velocity(
-                        &mut self.bodies[pair.a],
-                        None,
-                        contact,
-                        material_a.combined_restitution_raw(material_b),
-                        material_a.combined_friction_raw(material_b),
-                        impulse_state,
-                    );
-                }
-                ContactBodyIndex::Dynamic(index_b) => {
-                    let (a, b) = two_bodies_mut(&mut self.bodies, pair.a, index_b);
-                    let material_a = a.material();
-                    let material_b = b.material();
-                    solve_contact_velocity(
-                        a,
-                        Some(b),
-                        contact,
-                        material_a.combined_restitution_raw(material_b),
-                        material_a.combined_friction_raw(material_b),
-                        impulse_state,
-                    );
-                }
+        if reverse {
+            for index in (0..self.contacts.len()).rev() {
+                self.solve_contact_velocity(index, &mut impulse_states[index]);
+            }
+        } else {
+            for (index, impulse_state) in impulse_states.iter_mut().enumerate() {
+                self.solve_contact_velocity(index, impulse_state);
+            }
+        }
+    }
+
+    fn solve_contact_velocity(&mut self, index: usize, impulse_state: &mut ContactImpulseState) {
+        let contact = self.contacts[index];
+        let pair = self.contact_pairs[index];
+        match pair.b {
+            ContactBodyIndex::Static(static_index) => {
+                let material_a = self.bodies[pair.a].material();
+                let material_b = self.static_bodies[static_index].material();
+                solve_contact_velocity(
+                    &mut self.bodies[pair.a],
+                    None,
+                    &contact,
+                    material_a.combined_restitution_raw(material_b),
+                    material_a.combined_friction_raw(material_b),
+                    impulse_state,
+                );
+            }
+            ContactBodyIndex::Dynamic(index_b) => {
+                let (a, b) = two_bodies_mut(&mut self.bodies, pair.a, index_b);
+                let material_a = a.material();
+                let material_b = b.material();
+                solve_contact_velocity(
+                    a,
+                    Some(b),
+                    &contact,
+                    material_a.combined_restitution_raw(material_b),
+                    material_a.combined_friction_raw(material_b),
+                    impulse_state,
+                );
             }
         }
     }
 
     fn correct_positions(&mut self) {
         for (contact, pair) in self.contacts.iter().zip(self.contact_pairs.iter().copied()) {
+            if !pair.correct_position {
+                continue;
+            }
             let correction = contact
                 .penetration
                 .raw()
@@ -301,16 +319,23 @@ fn solve_contact_velocity(
     }
 
     let normal_speed = relative_speed_along(a, b.as_deref(), contact.point, normal);
-    if normal_speed < 0 {
-        let velocity_change = restitution_velocity_change(normal_speed, restitution_q16);
-        impulse_state.normal_velocity_change_q10 = impulse_state
-            .normal_velocity_change_q10
-            .saturating_add(velocity_change);
+    if !impulse_state.normal_initialized {
+        impulse_state.normal_target_speed_q10 =
+            restitution_target_speed(normal_speed, restitution_q16);
+        impulse_state.normal_initialized = true;
+    }
+    let previous_normal = impulse_state.normal_velocity_change_q10;
+    let candidate_normal =
+        previous_normal as i64 + impulse_state.normal_target_speed_q10 as i64 - normal_speed as i64;
+    let accumulated_normal = candidate_normal.max(0) as u64;
+    let normal_velocity_change = accumulated_normal as i64 - previous_normal as i64;
+    impulse_state.normal_velocity_change_q10 = accumulated_normal;
+    if normal_velocity_change != 0 {
         apply_contact_impulse(
             a,
             b.as_deref_mut(),
             normal,
-            velocity_change as i64,
+            normal_velocity_change,
             normal_inverse_sum,
             rap,
             rbp,
@@ -521,13 +546,14 @@ fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut B
 }
 
 #[inline(always)]
-fn restitution_velocity_change(normal_speed: i32, restitution: u32) -> u64 {
-    debug_assert!(normal_speed < 0);
+fn restitution_target_speed(normal_speed: i32, restitution: u32) -> u64 {
     debug_assert!(restitution <= 1 << 16);
+    if normal_speed >= 0 {
+        return 0;
+    }
     let closing_speed = normal_speed.unsigned_abs() as u64;
-    let restitution_factor = (1_u64 << 16) + restitution as u64;
-    let result = round_shift(closing_speed * restitution_factor, 16);
-    debug_assert!(result <= MAX_VELOCITY_CHANGE_RAW);
+    let result = round_shift(closing_speed * restitution as u64, 16);
+    debug_assert!(result <= MAX_RELATIVE_CONTACT_SPEED_RAW as u64);
     result
 }
 
@@ -555,7 +581,7 @@ fn div_round_u128(numerator: u128, denominator: u64) -> u64 {
 mod tests {
     use super::*;
     use crate::body::{BodyId, BodyState, Material, SleepConfig, StaticBody};
-    use crate::collider::{Circle, ColliderPart, CompositeCollider};
+    use crate::collider::{Circle, ColliderPart, CompositeCollider, Convex};
     use crate::geometry::{GeometryPoint, UnitVector};
     use crate::quantity::{Angle, AngularVelocity, Length, LinearAcceleration, Mass};
     use crate::transform::Transform;
@@ -577,6 +603,16 @@ mod tests {
 
     fn zero_gravity_world() -> World {
         World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    }
+
+    fn rectangle(half_width: f64, half_height: f64) -> Convex {
+        Convex::new(&[
+            Position::from_meters(-half_width, -half_height).unwrap(),
+            Position::from_meters(half_width, -half_height).unwrap(),
+            Position::from_meters(half_width, half_height).unwrap(),
+            Position::from_meters(-half_width, half_height).unwrap(),
+        ])
+        .unwrap()
     }
 
     #[test]
@@ -604,8 +640,8 @@ mod tests {
     #[test]
     fn maximum_solver_impulse_fits_u64_chain() {
         let normal_speed = -MAX_RELATIVE_CONTACT_SPEED_RAW;
-        let impulse =
-            restitution_velocity_change(normal_speed, Material::ELASTIC.restitution_raw());
+        let target = restitution_target_speed(normal_speed, Material::ELASTIC.restitution_raw());
+        let impulse = target + normal_speed.unsigned_abs() as u64;
         let inverse_mass = u32::MAX as u64;
         let inverse_sum = 2 * inverse_mass;
 
@@ -667,10 +703,11 @@ mod tests {
         world.contact_pairs.push(ContactPair {
             a: 0,
             b: ContactBodyIndex::Dynamic(1),
+            correct_position: true,
         });
 
         let mut impulse_states = [ContactImpulseState::default()];
-        world.solve_velocities(&mut impulse_states);
+        world.solve_velocities(&mut impulse_states, false);
 
         let a = world.body(BodyId::new(1)).unwrap();
         let b = world.body(BodyId::new(2)).unwrap();
@@ -714,10 +751,11 @@ mod tests {
         world.contact_pairs.push(ContactPair {
             a: 0,
             b: ContactBodyIndex::Static(0),
+            correct_position: true,
         });
 
         let mut impulse_states = [ContactImpulseState::default()];
-        world.solve_velocities(&mut impulse_states);
+        world.solve_velocities(&mut impulse_states, false);
 
         let body = world.body(BodyId::new(1)).unwrap();
         assert_eq!(body.state().linear_velocity().raw(), [683, 0]);
@@ -728,7 +766,7 @@ mod tests {
         );
 
         let after_first_solve = *body.state();
-        world.solve_velocities(&mut impulse_states);
+        world.solve_velocities(&mut impulse_states, false);
         assert_eq!(
             *world.body(BodyId::new(1)).unwrap().state(),
             after_first_solve
@@ -761,10 +799,11 @@ mod tests {
         world.contact_pairs.push(ContactPair {
             a: 0,
             b: ContactBodyIndex::Dynamic(1),
+            correct_position: true,
         });
 
         let mut impulse_states = [ContactImpulseState::default()];
-        world.solve_velocities(&mut impulse_states);
+        world.solve_velocities(&mut impulse_states, false);
 
         let a = world.body(BodyId::new(1)).unwrap();
         let b = world.body(BodyId::new(2)).unwrap();
@@ -786,6 +825,56 @@ mod tests {
             friction_velocity_change_limit_q10(1 << 13, 1 << 10, inverse_mass, 3 * inverse_mass,),
             384
         );
+    }
+
+    #[test]
+    fn aligned_box_does_not_gain_spin_on_a_rough_inclined_plane() {
+        let material = Material::new(0.0, 0.8).unwrap();
+        let angle = Angle::from_radians(20_f64.to_radians()).unwrap();
+        let mut world = World::default();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(1),
+                Transform::new(Position::ZERO, angle),
+                CompositeCollider::single(rectangle(5.0, 0.2).into()).unwrap(),
+                material,
+            ))
+            .unwrap();
+        world
+            .add_body(Body::dynamic(
+                BodyId::new(2),
+                rectangle(0.65, 0.4),
+                Mass::ONE,
+                material,
+                BodyState::new(
+                    Transform::new(Position::from_meters(0.8, 0.88).unwrap(), angle),
+                    LinearVelocity::ZERO,
+                    AngularVelocity::ZERO,
+                ),
+            ))
+            .unwrap();
+
+        let first_stats = world.step();
+        for _ in 1..128 {
+            world.step();
+        }
+
+        let body = world.body(BodyId::new(2)).unwrap();
+        assert!(
+            body.state()
+                .angular_velocity()
+                .to_radians_per_second()
+                .abs()
+                < 0.02,
+            "unexpected spin: {} rad/s",
+            body.state().angular_velocity().to_radians_per_second(),
+        );
+        assert!(
+            (body.state().transform().angle.to_radians() - angle.to_radians()).abs() < 0.01,
+            "box rotated away from the plane: {} rad",
+            body.state().transform().angle.to_radians(),
+        );
+        assert_eq!(first_stats.contacts, 2);
     }
 
     #[test]

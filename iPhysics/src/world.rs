@@ -32,6 +32,8 @@ pub struct World {
 pub(super) struct ContactPair {
     pub(super) a: usize,
     pub(super) b: ContactBodyIndex,
+    /// Position correction is shared by all points in one manifold.
+    pub(super) correct_position: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

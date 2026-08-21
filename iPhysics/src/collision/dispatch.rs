@@ -1,4 +1,4 @@
-use super::{Contact, circle_circle, circle_convex, convex_convex};
+use super::{ContactManifold, circle_circle, circle_convex, convex_convex};
 use crate::body::BodyId;
 use crate::collider::Collider;
 use crate::transform::Transform;
@@ -10,7 +10,7 @@ pub(crate) fn collide(
     body_b: BodyId,
     collider_b: Collider,
     transform_b: Transform,
-) -> Option<Contact> {
+) -> Option<ContactManifold> {
     match (collider_a, collider_b) {
         (Collider::Circle(a), Collider::Circle(b)) => circle_circle::collide(
             body_a,
@@ -19,13 +19,15 @@ pub(crate) fn collide(
             body_b,
             b,
             transform_b.position,
-        ),
+        )
+        .map(ContactManifold::one),
         (Collider::Circle(circle), Collider::Convex(convex)) => {
             circle_convex::collide(body_a, circle, transform_a, body_b, convex, transform_b)
+                .map(ContactManifold::one)
         }
         (Collider::Convex(convex), Collider::Circle(circle)) => {
             circle_convex::collide(body_b, circle, transform_b, body_a, convex, transform_a)
-                .map(Contact::flipped)
+                .map(|contact| ContactManifold::one(contact.flipped()))
         }
         (Collider::Convex(a), Collider::Convex(b)) => {
             convex_convex::collide(body_a, a, transform_a, body_b, b, transform_b)
@@ -62,6 +64,7 @@ mod tests {
             Transform::IDENTITY,
         )
         .unwrap();
+        let contact = contact.first();
 
         assert_eq!(contact.body_a, BodyId::new(1));
         assert_eq!(contact.body_b, BodyId::new(2));

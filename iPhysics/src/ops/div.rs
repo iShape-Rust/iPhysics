@@ -4,6 +4,26 @@ pub(crate) trait DivRoundShift {
     fn div_round_shift_saturating(self, denominator: u128, shift: u32) -> u64;
 }
 
+pub(crate) trait DivRound {
+    fn div_round(self, denominator: Self) -> Self;
+}
+
+impl DivRound for i128 {
+    #[inline(always)]
+    fn div_round(self, denominator: Self) -> Self {
+        debug_assert!(denominator != 0);
+        let negative = (self < 0) != (denominator < 0);
+        let numerator = self.unsigned_abs();
+        let denominator = denominator.unsigned_abs();
+        let magnitude = (numerator + (denominator >> 1)) / denominator;
+        if negative {
+            -(magnitude as i128)
+        } else {
+            magnitude as i128
+        }
+    }
+}
+
 impl DivRoundShift for u128 {
     fn div_round_shift_saturating(self, denominator: u128, shift: u32) -> u64 {
         debug_assert!(denominator > 0);
@@ -39,5 +59,12 @@ mod tests {
     fn shifted_division_rounds_and_saturates() {
         assert_eq!(1_u128.div_round_shift_saturating(3, 4), 5);
         assert_eq!(u128::MAX.div_round_shift_saturating(1, 40), u64::MAX);
+    }
+
+    #[test]
+    fn signed_division_rounds_away_from_zero() {
+        assert_eq!(5_i128.div_round(2), 3);
+        assert_eq!((-5_i128).div_round(2), -3);
+        assert_eq!(5_i128.div_round(-2), -3);
     }
 }
