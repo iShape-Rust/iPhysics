@@ -1,4 +1,4 @@
-use crate::fix::quantize::Quantize;
+use crate::ops::quantize::Quantize;
 
 /// Positive body mass in kilograms, stored as unsigned Q14.
 ///

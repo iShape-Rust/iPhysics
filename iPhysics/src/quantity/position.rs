@@ -1,6 +1,6 @@
 use super::linear_velocity::LinearVelocity;
 use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
-use crate::fix::{quantize::Quantize, shift::RoundShift};
+use crate::ops::{quantize::Quantize, shift::RoundShift};
 use crate::geometry::vec::RawVec2;
 use crate::{Angle, GeometryPoint};
 use i_float::int::point::IntPoint;

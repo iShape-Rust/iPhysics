@@ -1,4 +1,4 @@
-use crate::fix::shift::RoundShift;
+use crate::ops::shift::RoundShift;
 
 use super::{
     Angle, AngleDelta, AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity,

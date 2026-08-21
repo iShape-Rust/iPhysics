@@ -1,4 +1,4 @@
-use crate::fix::shift::RoundShift;
+use crate::ops::shift::RoundShift;
 use crate::quantity::RawVec2;
 use crate::Angle;
 

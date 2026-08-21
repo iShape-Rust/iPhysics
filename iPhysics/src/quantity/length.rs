@@ -1,4 +1,4 @@
-use crate::fix::quantize::Quantize;
+use crate::ops::quantize::Quantize;
 
 use super::{POSITION_FRACTION_BITS, Position};
 

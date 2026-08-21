@@ -4,7 +4,7 @@ extern crate alloc;
 pub mod body;
 pub mod collider;
 pub mod collision;
-pub(crate) mod fix;
+pub(crate) mod ops;
 pub mod geometry;
 pub mod quantity;
 pub mod transform;

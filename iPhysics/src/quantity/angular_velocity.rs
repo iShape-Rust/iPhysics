@@ -1,4 +1,4 @@
-use crate::fix::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
+use crate::ops::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
 
 use super::angle::AngleDelta;
 use super::angular_acceleration::AngularAcceleration;

@@ -1,4 +1,4 @@
-use crate::fix::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
+use crate::ops::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
 
 use super::linear_acceleration::LinearAcceleration;
 use super::{ACCELERATION_TO_VELOCITY_SHIFT, KINEMATIC_FRACTION_BITS};
