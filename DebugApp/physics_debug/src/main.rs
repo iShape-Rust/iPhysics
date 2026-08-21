@@ -20,6 +20,12 @@ enum Scenario {
     ElasticCircles,
     SleepOnSupport,
     CirclePile,
+    FrictionComparison,
+    SpinningCircle,
+    InclinedPlane,
+    RestitutionComparison,
+    OffCenterImpact,
+    BoxStack,
     CircleVsConvex,
     ConvexVsConvex,
     CompositePlayground,
@@ -27,11 +33,17 @@ enum Scenario {
 }
 
 impl Scenario {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 14] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
         Self::CirclePile,
+        Self::FrictionComparison,
+        Self::SpinningCircle,
+        Self::InclinedPlane,
+        Self::RestitutionComparison,
+        Self::OffCenterImpact,
+        Self::BoxStack,
         Self::CircleVsConvex,
         Self::ConvexVsConvex,
         Self::CompositePlayground,
@@ -44,6 +56,12 @@ impl Scenario {
             Self::ElasticCircles => "Two elastic circles",
             Self::SleepOnSupport => "Sleep on static support",
             Self::CirclePile => "Circle pile / pyramid",
+            Self::FrictionComparison => "Friction comparison",
+            Self::SpinningCircle => "Spinning circle on rough floor",
+            Self::InclinedPlane => "Circle + box on inclined plane",
+            Self::RestitutionComparison => "Restitution comparison",
+            Self::OffCenterImpact => "Off-center impact",
+            Self::BoxStack => "Box stack stability",
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
@@ -57,6 +75,18 @@ impl Scenario {
             Self::ElasticCircles => "Equal masses and restitution 1 exchange velocities.",
             Self::SleepOnSupport => "A falling circle settles on a large static circle.",
             Self::CirclePile => "Six circles start in a small pyramid above a curved support.",
+            Self::FrictionComparison => {
+                "IDs 2/3/4 slide right with friction 0.0/0.5/2.0 on separate tracks."
+            }
+            Self::SpinningCircle => {
+                "A spinning circle starts at rest; rough contact converts spin into rolling."
+            }
+            Self::InclinedPlane => "A circle and a box descend a rough 20 degree ramp.",
+            Self::RestitutionComparison => "IDs 2/3/4 fall with restitution 0.0/0.5/1.0.",
+            Self::OffCenterImpact => {
+                "A circle strikes above a box center to exercise angular impulse response."
+            }
+            Self::BoxStack => "Six slightly rotated boxes test resting-contact stability.",
             Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
             Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
             Self::CompositePlayground => {
@@ -119,7 +149,9 @@ impl eframe::App for PhysicsDebugApp {
             .resizable(false)
             .default_size(280.0)
             .frame(egui::Frame::default().fill(Color32::from_rgb(24, 27, 32)))
-            .show_inside(ui, |ui| self.controls(ui));
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
+            });
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(self.grid.background))
@@ -138,14 +170,13 @@ impl PhysicsDebugApp {
         ui.add_space(8.0);
 
         let previous = self.scenario;
-        egui::ComboBox::from_label("Scenario")
-            .selected_text(self.scenario.label())
-            .width(230.0)
-            .show_ui(ui, |ui| {
-                for scenario in Scenario::ALL {
-                    ui.selectable_value(&mut self.scenario, scenario, scenario.label());
-                }
-            });
+        ui.label("Scenario");
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+            for scenario in Scenario::ALL {
+                ui.selectable_value(&mut self.scenario, scenario, scenario.label());
+            }
+        });
         if self.scenario != previous {
             self.reset();
         }
@@ -430,6 +461,9 @@ fn paint_collider(
             let radius = circle.radius().to_meters() as f32 * camera.zoom;
             painter.circle_filled(center, radius, fill);
             painter.circle_stroke(center, radius, stroke);
+            let angle = transform.angle.to_radians() as f32;
+            let radius_tip = center + Vec2::new(angle.cos(), -angle.sin()) * radius;
+            painter.line_segment([center, radius_tip], stroke);
             painter.circle_filled(center, 2.5, color);
         }
         Collider::Convex(convex) => {
@@ -555,6 +589,122 @@ fn build_world(scenario: Scenario) -> World {
             }
             world
         }
+        Scenario::FrictionComparison => {
+            let mut world = World::default();
+            add_static(&mut world, parallel_tracks(1));
+            for (id, y, friction) in [(2, 3.2, 0.0), (3, 0.2, 0.5), (4, -2.8, 2.0)] {
+                add(
+                    &mut world,
+                    dynamic(
+                        id,
+                        -4.0,
+                        y,
+                        0.5,
+                        4.0,
+                        0.0,
+                        Material::new(0.0, friction).unwrap(),
+                    ),
+                );
+            }
+            world
+        }
+        Scenario::SpinningCircle => {
+            let mut world = World::default();
+            add_static(&mut world, flat_floor(1, Material::new(0.0, 1.5).unwrap()));
+            add(
+                &mut world,
+                dynamic_spinning_circle(
+                    2,
+                    0.0,
+                    -0.43,
+                    0.55,
+                    0.0,
+                    0.0,
+                    8.0,
+                    Material::new(0.0, 1.5).unwrap(),
+                ),
+            );
+            world
+        }
+        Scenario::InclinedPlane => {
+            let mut world = World::default();
+            let rough = Material::new(0.0, 0.8).unwrap();
+            add_static(&mut world, inclined_floor(1, 20.0, rough));
+            add(&mut world, dynamic(2, 2.7, 1.67, 0.5, 0.0, 0.0, rough));
+            add(
+                &mut world,
+                dynamic_convex(
+                    3,
+                    0.8,
+                    0.88,
+                    angle_degrees(20.0),
+                    rectangle(0.65, 0.4),
+                    0.0,
+                    0.0,
+                    rough,
+                ),
+            );
+            world
+        }
+        Scenario::RestitutionComparison => {
+            let mut world = World::default();
+            add_static(&mut world, flat_floor(1, Material::new(0.0, 0.0).unwrap()));
+            for (id, x, restitution) in [(2, -3.0, 0.0), (3, 0.0, 0.5), (4, 3.0, 1.0)] {
+                add(
+                    &mut world,
+                    dynamic(
+                        id,
+                        x,
+                        4.0,
+                        0.5,
+                        0.0,
+                        0.0,
+                        Material::new(restitution, 0.0).unwrap(),
+                    ),
+                );
+            }
+            world
+        }
+        Scenario::OffCenterImpact => {
+            let mut world = zero_gravity_world();
+            let material = Material::new(0.5, 0.0).unwrap();
+            add(&mut world, dynamic(1, -4.0, 1.6, 0.4, 6.0, 0.0, material));
+            add(
+                &mut world,
+                dynamic_convex(
+                    2,
+                    1.0,
+                    1.0,
+                    Angle::ZERO,
+                    rectangle(0.75, 1.0),
+                    0.0,
+                    0.0,
+                    material,
+                ),
+            );
+            world
+        }
+        Scenario::BoxStack => {
+            let mut world = World::default();
+            add_static(&mut world, flat_floor(1, Material::INELASTIC));
+            for level in 0..6 {
+                let angle = if level % 2 == 0 { 1.5 } else { -1.5 };
+                add(
+                    &mut world,
+                    dynamic_convex(
+                        level + 2,
+                        0.0,
+                        -0.63 + level as f64 * 0.72,
+                        angle_degrees(angle),
+                        rectangle(0.65, 0.35),
+                        0.0,
+                        0.0,
+                        Material::INELASTIC,
+                    ),
+                );
+            }
+            world
+        }
         Scenario::CircleVsConvex => {
             let mut world = zero_gravity_world();
             add(
@@ -671,6 +821,32 @@ fn dynamic(id: u64, x: f64, y: f64, radius: f64, vx: f64, vy: f64, material: Mat
 }
 
 #[allow(clippy::too_many_arguments)]
+fn dynamic_spinning_circle(
+    id: u64,
+    x: f64,
+    y: f64,
+    radius: f64,
+    vx: f64,
+    vy: f64,
+    angular_velocity: f64,
+    material: Material,
+) -> Body {
+    let collider = Circle::new(Length::from_meters(radius).expect("scenario radius must fit"))
+        .expect("scenario radius must be positive");
+    dynamic_collider_with_spin(
+        id,
+        x,
+        y,
+        Angle::ZERO,
+        collider,
+        vx,
+        vy,
+        angular_velocity,
+        material,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn dynamic_convex(
     id: u64,
     x: f64,
@@ -695,6 +871,21 @@ fn dynamic_collider(
     vy: f64,
     material: Material,
 ) -> Body {
+    dynamic_collider_with_spin(id, x, y, angle, collider, vx, vy, 0.0, material)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dynamic_collider_with_spin(
+    id: u64,
+    x: f64,
+    y: f64,
+    angle: Angle,
+    collider: impl Into<Collider>,
+    vx: f64,
+    vy: f64,
+    angular_velocity: f64,
+    material: Material,
+) -> Body {
     Body::dynamic(
         BodyId::new(id),
         collider,
@@ -706,7 +897,8 @@ fn dynamic_collider(
                 angle,
             ),
             LinearVelocity::from_meters_per_second(vx, vy).expect("scenario velocity must fit"),
-            AngularVelocity::ZERO,
+            AngularVelocity::from_radians_per_second(angular_velocity)
+                .expect("scenario angular velocity must fit"),
         ),
     )
 }
@@ -750,6 +942,48 @@ fn convex(vertices: &[(f64, f64)]) -> Convex {
 
 fn angle_degrees(degrees: f64) -> Angle {
     Angle::from_radians(degrees.to_radians()).expect("scenario angle must be finite")
+}
+
+fn flat_floor(id: u64, material: Material) -> StaticBody {
+    StaticBody::new(
+        BodyId::new(id),
+        Transform::new(Position::from_meters(0.0, -1.25).unwrap(), Angle::ZERO),
+        CompositeCollider::single(rectangle(5.5, 0.25).into())
+            .expect("flat floor collider must fit"),
+        material,
+    )
+}
+
+fn inclined_floor(id: u64, degrees: f64, material: Material) -> StaticBody {
+    StaticBody::new(
+        BodyId::new(id),
+        Transform::new(
+            Position::from_meters(0.0, 0.0).unwrap(),
+            angle_degrees(degrees),
+        ),
+        CompositeCollider::single(rectangle(5.0, 0.2).into())
+            .expect("inclined floor collider must fit"),
+        material,
+    )
+}
+
+fn parallel_tracks(id: u64) -> StaticBody {
+    let parts = [2.5, -0.5, -3.5]
+        .into_iter()
+        .map(|y| {
+            ColliderPart::new(
+                Transform::new(Position::from_meters(0.0, y).unwrap(), Angle::ZERO),
+                rectangle(5.5, 0.18).into(),
+            )
+        })
+        .collect();
+
+    StaticBody::new(
+        BodyId::new(id),
+        Transform::IDENTITY,
+        CompositeCollider::new(parts).expect("parallel track parts must fit"),
+        Material::new(0.0, 0.0).unwrap(),
+    )
 }
 
 fn static_support(id: u64) -> StaticBody {
@@ -852,8 +1086,14 @@ mod tests {
     }
 
     #[test]
-    fn new_collider_scenes_generate_contacts() {
+    fn diagnostic_scenes_generate_contacts() {
         for scenario in [
+            Scenario::FrictionComparison,
+            Scenario::SpinningCircle,
+            Scenario::InclinedPlane,
+            Scenario::RestitutionComparison,
+            Scenario::OffCenterImpact,
+            Scenario::BoxStack,
             Scenario::CircleVsConvex,
             Scenario::ConvexVsConvex,
             Scenario::CompositePlayground,
@@ -865,6 +1105,43 @@ mod tests {
             }
             assert!(contact_seen, "{} produced no contacts", scenario.label());
         }
+    }
+
+    #[test]
+    fn friction_comparison_distinguishes_smooth_and_rough_tracks() {
+        let mut world = build_world(Scenario::FrictionComparison);
+        for _ in 0..32 {
+            world.step();
+        }
+
+        let smooth = world
+            .bodies()
+            .iter()
+            .find(|body| body.id() == BodyId::new(2))
+            .unwrap();
+        let rough = world
+            .bodies()
+            .iter()
+            .find(|body| body.id() == BodyId::new(4))
+            .unwrap();
+
+        assert_eq!(smooth.state().angular_velocity(), AngularVelocity::ZERO);
+        assert!(rough.state().angular_velocity().raw() < 0);
+    }
+
+    #[test]
+    fn off_center_impact_spins_the_box() {
+        let mut world = build_world(Scenario::OffCenterImpact);
+        for _ in 0..128 {
+            world.step();
+        }
+
+        let box_body = world
+            .bodies()
+            .iter()
+            .find(|body| body.id() == BodyId::new(2))
+            .unwrap();
+        assert_ne!(box_body.state().angular_velocity(), AngularVelocity::ZERO);
     }
 
     #[test]

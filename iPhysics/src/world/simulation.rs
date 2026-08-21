@@ -1,16 +1,16 @@
 use super::{ContactBodyIndex, ContactPair, World};
-use crate::GeometryPoint;
 use crate::body::Body;
 use crate::collision::{Contact, collide};
 use crate::quantity::{AngularVelocity, LinearVelocity, Position};
+use crate::{GeometryPoint, UnitVector};
 use alloc::vec;
 
 const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 const POSITION_SLOP_RAW: u32 = 64; // 1/1024 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
-const MAX_RELATIVE_NORMAL_SPEED_RAW: i32 = 4 * LinearVelocity::MAX_VELOCITY;
-const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_NORMAL_SPEED_RAW as u64;
+const MAX_RELATIVE_CONTACT_SPEED_RAW: i32 = 4 * LinearVelocity::MAX_VELOCITY;
+const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StepStats {
@@ -20,6 +20,15 @@ pub struct StepStats {
     pub sleeping_bodies: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ContactImpulseState {
+    // These are impulse numerators: dividing each by the corresponding Q24
+    // effective inverse mass yields the scalar contact impulse. Keeping Q10
+    // numerators avoids introducing another stored fixed-point format.
+    normal_velocity_change_q10: u64,
+    tangent_velocity_change_q10: i64,
+}
+
 impl World {
     pub fn step(&mut self) -> StepStats {
         self.integrate_velocities();
@@ -27,8 +36,9 @@ impl World {
         let mut stats = self.build_contacts();
         self.wake_impacted_bodies();
 
+        let mut impulse_states = vec![ContactImpulseState::default(); self.contacts.len()];
         for _ in 0..self.settings.velocity_iterations.max(1) {
-            self.solve_velocities();
+            self.solve_velocities(&mut impulse_states);
         }
         self.correct_positions();
         self.integrate_transforms();
@@ -174,90 +184,42 @@ impl World {
         }
     }
 
-    fn solve_velocities(&mut self) {
-        for (contact, pair) in self.contacts.iter().zip(self.contact_pairs.iter().copied()) {
-            if let ContactBodyIndex::Static(static_index) = pair.b {
-                let a = &mut self.bodies[pair.a];
-                let inverse_a = a.inverse_mass_q24() as u64;
-                let inverse_inertia_a = a.inverse_inertia_q40();
-                let rap = contact_lever_cross_normal(a, contact);
-                let inverse_sum =
-                    inverse_a.saturating_add(rotational_inverse_mass_q24(rap, inverse_inertia_a));
-                if inverse_sum == 0 {
-                    continue;
+    fn solve_velocities(&mut self, impulse_states: &mut [ContactImpulseState]) {
+        debug_assert_eq!(impulse_states.len(), self.contacts.len());
+
+        for ((contact, pair), impulse_state) in self
+            .contacts
+            .iter()
+            .zip(self.contact_pairs.iter().copied())
+            .zip(impulse_states.iter_mut())
+        {
+            match pair.b {
+                ContactBodyIndex::Static(static_index) => {
+                    let material_a = self.bodies[pair.a].material();
+                    let material_b = self.static_bodies[static_index].material();
+                    solve_contact_velocity(
+                        &mut self.bodies[pair.a],
+                        None,
+                        contact,
+                        material_a.combined_restitution_raw(material_b),
+                        material_a.combined_friction_raw(material_b),
+                        impulse_state,
+                    );
                 }
-                let normal_speed = relative_normal_speed(a, None, contact);
-                if normal_speed >= 0 {
-                    continue;
+                ContactBodyIndex::Dynamic(index_b) => {
+                    let (a, b) = two_bodies_mut(&mut self.bodies, pair.a, index_b);
+                    let material_a = a.material();
+                    let material_b = b.material();
+                    solve_contact_velocity(
+                        a,
+                        Some(b),
+                        contact,
+                        material_a.combined_restitution_raw(material_b),
+                        material_a.combined_friction_raw(material_b),
+                        impulse_state,
+                    );
                 }
-                let restitution = a.material().restitution_raw().max(
-                    self.static_bodies[static_index]
-                        .material()
-                        .restitution_raw(),
-                );
-                let velocity_change = restitution_velocity_change(normal_speed, restitution);
-                let linear_change =
-                    div_round_u128(velocity_change as u128 * inverse_a as u128, inverse_sum);
-                if linear_change != 0 {
-                    let [change_x, change_y] = contact.normal.scaled_wide_raw(linear_change);
-                    add_velocity(a, -change_x, -change_y);
-                }
-                let angular_change = angular_velocity_change_raw(
-                    velocity_change,
-                    inverse_inertia_a,
-                    rap,
-                    inverse_sum,
-                );
-                add_angular_velocity(a, -angular_change);
-                continue;
             }
-
-            let ContactBodyIndex::Dynamic(index_b) = pair.b else {
-                unreachable!()
-            };
-            let (a, b) = two_bodies_mut(&mut self.bodies, pair.a, index_b);
-            let inverse_a = a.inverse_mass_q24() as u64;
-            let inverse_b = b.inverse_mass_q24() as u64;
-            let inverse_inertia_a = a.inverse_inertia_q40();
-            let inverse_inertia_b = b.inverse_inertia_q40();
-            let rap = contact_lever_cross_normal(a, contact);
-            let rbp = contact_lever_cross_normal(b, contact);
-            let inverse_sum = inverse_a
-                .saturating_add(inverse_b)
-                .saturating_add(rotational_inverse_mass_q24(rap, inverse_inertia_a))
-                .saturating_add(rotational_inverse_mass_q24(rbp, inverse_inertia_b));
-            if inverse_sum == 0 {
-                continue;
-            }
-
-            let normal_speed = relative_normal_speed(a, Some(b), contact);
-            if normal_speed >= 0 {
-                continue;
-            }
-
-            let restitution = a
-                .material()
-                .restitution_raw()
-                .max(b.material().restitution_raw());
-            let velocity_change = restitution_velocity_change(normal_speed, restitution);
-            let change_a = div_round_u128(velocity_change as u128 * inverse_a as u128, inverse_sum);
-            let change_b = div_round_u128(velocity_change as u128 * inverse_b as u128, inverse_sum);
-
-            if inverse_a != 0 {
-                let [change_x, change_y] = contact.normal.scaled_wide_raw(change_a);
-                add_velocity(a, -change_x, -change_y);
-            }
-            if inverse_b != 0 {
-                let [change_x, change_y] = contact.normal.scaled_wide_raw(change_b);
-                add_velocity(b, change_x, change_y);
-            }
-
-            let angular_change_a =
-                angular_velocity_change_raw(velocity_change, inverse_inertia_a, rap, inverse_sum);
-            let angular_change_b =
-                angular_velocity_change_raw(velocity_change, inverse_inertia_b, rbp, inverse_sum);
-            add_angular_velocity(a, -angular_change_a);
-            add_angular_velocity(b, angular_change_b);
         }
     }
 
@@ -319,35 +281,187 @@ impl World {
     }
 }
 
+fn solve_contact_velocity(
+    a: &mut Body,
+    mut b: Option<&mut Body>,
+    contact: &Contact,
+    restitution_q16: u32,
+    friction_q16: u32,
+    impulse_state: &mut ContactImpulseState,
+) {
+    let normal = contact.normal;
+    let rap = contact_lever_cross_axis(a, contact.point, normal);
+    let rbp = b
+        .as_deref()
+        .map(|body| contact_lever_cross_axis(body, contact.point, normal))
+        .unwrap_or(0);
+    let normal_inverse_sum = contact_inverse_mass_q24(a, b.as_deref(), rap, rbp);
+    if normal_inverse_sum == 0 {
+        return;
+    }
+
+    let normal_speed = relative_speed_along(a, b.as_deref(), contact.point, normal);
+    if normal_speed < 0 {
+        let velocity_change = restitution_velocity_change(normal_speed, restitution_q16);
+        impulse_state.normal_velocity_change_q10 = impulse_state
+            .normal_velocity_change_q10
+            .saturating_add(velocity_change);
+        apply_contact_impulse(
+            a,
+            b.as_deref_mut(),
+            normal,
+            velocity_change as i64,
+            normal_inverse_sum,
+            rap,
+            rbp,
+        );
+    }
+
+    if friction_q16 == 0 || impulse_state.normal_velocity_change_q10 == 0 {
+        return;
+    }
+
+    let tangent = normal.perpendicular();
+    let rat = contact_lever_cross_axis(a, contact.point, tangent);
+    let rbt = b
+        .as_deref()
+        .map(|body| contact_lever_cross_axis(body, contact.point, tangent))
+        .unwrap_or(0);
+    let tangent_inverse_sum = contact_inverse_mass_q24(a, b.as_deref(), rat, rbt);
+    if tangent_inverse_sum == 0 {
+        return;
+    }
+
+    let tangent_speed = relative_speed_along(a, b.as_deref(), contact.point, tangent);
+    let previous = impulse_state.tangent_velocity_change_q10;
+    let candidate = previous.saturating_sub(tangent_speed as i64);
+    let limit = friction_velocity_change_limit_q10(
+        friction_q16,
+        impulse_state.normal_velocity_change_q10,
+        normal_inverse_sum,
+        tangent_inverse_sum,
+    );
+    let accumulated = candidate.clamp(-limit, limit);
+    let velocity_change = accumulated - previous;
+    impulse_state.tangent_velocity_change_q10 = accumulated;
+
+    apply_contact_impulse(
+        a,
+        b,
+        tangent,
+        velocity_change,
+        tangent_inverse_sum,
+        rat,
+        rbt,
+    );
+}
+
+#[inline(always)]
+fn contact_inverse_mass_q24(a: &Body, b: Option<&Body>, lever_a_q16: i64, lever_b_q16: i64) -> u64 {
+    let inverse_b = b.map(Body::inverse_mass_q24).unwrap_or(0) as u64;
+    let inverse_inertia_b = b.map(Body::inverse_inertia_q40).unwrap_or(0);
+    (a.inverse_mass_q24() as u64)
+        .saturating_add(inverse_b)
+        .saturating_add(rotational_inverse_mass_q24(
+            lever_a_q16,
+            a.inverse_inertia_q40(),
+        ))
+        .saturating_add(rotational_inverse_mass_q24(lever_b_q16, inverse_inertia_b))
+}
+
+fn apply_contact_impulse(
+    a: &mut Body,
+    b: Option<&mut Body>,
+    mut axis: UnitVector,
+    impulse_numerator_q10: i64,
+    inverse_sum_q24: u64,
+    mut lever_a_q16: i64,
+    mut lever_b_q16: i64,
+) {
+    if impulse_numerator_q10 == 0 {
+        return;
+    }
+
+    if impulse_numerator_q10 < 0 {
+        axis = -axis;
+        lever_a_q16 = -lever_a_q16;
+        lever_b_q16 = -lever_b_q16;
+    }
+    let magnitude = impulse_numerator_q10.unsigned_abs();
+    debug_assert!(magnitude <= MAX_VELOCITY_CHANGE_RAW);
+    let inverse_a = a.inverse_mass_q24() as u64;
+    let inverse_b = b.as_deref().map(Body::inverse_mass_q24).unwrap_or(0) as u64;
+    let inverse_inertia_a = a.inverse_inertia_q40();
+    let inverse_inertia_b = b.as_deref().map(Body::inverse_inertia_q40).unwrap_or(0);
+
+    let change_a = div_round_u128(magnitude as u128 * inverse_a as u128, inverse_sum_q24);
+    if change_a != 0 {
+        let [change_x, change_y] = axis.scaled_wide_raw(change_a);
+        add_velocity(a, -change_x, -change_y);
+    }
+    let angular_change_a =
+        angular_velocity_change_raw(magnitude, inverse_inertia_a, lever_a_q16, inverse_sum_q24);
+    add_angular_velocity(a, -angular_change_a);
+
+    if let Some(body) = b {
+        let change_b = div_round_u128(magnitude as u128 * inverse_b as u128, inverse_sum_q24);
+        if change_b != 0 {
+            let [change_x, change_y] = axis.scaled_wide_raw(change_b);
+            add_velocity(body, change_x, change_y);
+        }
+        let angular_change_b =
+            angular_velocity_change_raw(magnitude, inverse_inertia_b, lever_b_q16, inverse_sum_q24);
+        add_angular_velocity(body, angular_change_b);
+    }
+}
+
+#[inline(always)]
+fn friction_velocity_change_limit_q10(
+    friction_q16: u32,
+    normal_velocity_change_q10: u64,
+    normal_inverse_sum_q24: u64,
+    tangent_inverse_sum_q24: u64,
+) -> i64 {
+    let numerator = (friction_q16 as u128)
+        .saturating_mul(normal_velocity_change_q10 as u128)
+        .saturating_mul(tangent_inverse_sum_q24 as u128);
+    let denominator = (normal_inverse_sum_q24 as u128) << 16;
+    (numerator / denominator).min(i64::MAX as u128) as i64
+}
+
 fn relative_normal_speed(a: &Body, b: Option<&Body>, contact: &Contact) -> i32 {
+    relative_speed_along(a, b, contact.point, contact.normal)
+}
+
+fn relative_speed_along(a: &Body, b: Option<&Body>, point: GeometryPoint, axis: UnitVector) -> i32 {
     let av = a.state().linear_velocity();
     let bv = b
         .map(|body| body.state().linear_velocity())
         .unwrap_or(LinearVelocity::ZERO);
-    let linear_speed = contact.normal.dot(bv - av);
-    let angular_a = angular_contact_speed_raw(a, contact);
+    let linear_speed = axis.dot(bv - av);
+    let angular_a = angular_contact_speed_raw(a, point, axis);
     let angular_b = b
-        .map(|body| angular_contact_speed_raw(body, contact))
+        .map(|body| angular_contact_speed_raw(body, point, axis))
         .unwrap_or(0);
     let speed = linear_speed + angular_b - angular_a;
     speed.clamp(
-        -(MAX_RELATIVE_NORMAL_SPEED_RAW as i64),
-        MAX_RELATIVE_NORMAL_SPEED_RAW as i64,
+        -(MAX_RELATIVE_CONTACT_SPEED_RAW as i64),
+        MAX_RELATIVE_CONTACT_SPEED_RAW as i64,
     ) as i32
 }
 
 #[inline(always)]
-fn contact_lever_cross_normal(body: &Body, contact: &Contact) -> i64 {
+fn contact_lever_cross_axis(body: &Body, point: GeometryPoint, axis: UnitVector) -> i64 {
     let center = GeometryPoint::from(body.state().transform().position);
-    let lever = contact.point - center;
-    -contact.normal.cross(lever)
+    let lever = point - center;
+    -axis.cross(lever)
 }
 
 #[inline(always)]
-fn angular_contact_speed_raw(body: &Body, contact: &Contact) -> i64 {
+fn angular_contact_speed_raw(body: &Body, point: GeometryPoint, axis: UnitVector) -> i64 {
     body.state()
         .angular_velocity()
-        .projected_point_speed_raw(contact_lever_cross_normal(body, contact))
+        .projected_point_speed_raw(contact_lever_cross_axis(body, point, axis))
 }
 
 #[inline(always)]
@@ -483,13 +597,13 @@ mod tests {
 
         assert_eq!(
             relative_normal_speed(&a, Some(&b), &contact),
-            MAX_RELATIVE_NORMAL_SPEED_RAW
+            MAX_RELATIVE_CONTACT_SPEED_RAW
         );
     }
 
     #[test]
     fn maximum_solver_impulse_fits_u64_chain() {
-        let normal_speed = -MAX_RELATIVE_NORMAL_SPEED_RAW;
+        let normal_speed = -MAX_RELATIVE_CONTACT_SPEED_RAW;
         let impulse =
             restitution_velocity_change(normal_speed, Material::ELASTIC.restitution_raw());
         let inverse_mass = u32::MAX as u64;
@@ -555,7 +669,8 @@ mod tests {
             b: ContactBodyIndex::Dynamic(1),
         });
 
-        world.solve_velocities();
+        let mut impulse_states = [ContactImpulseState::default()];
+        world.solve_velocities(&mut impulse_states);
 
         let a = world.body(BodyId::new(1)).unwrap();
         let b = world.body(BodyId::new(2)).unwrap();
@@ -564,6 +679,113 @@ mod tests {
         assert!(a.state().angular_velocity().raw() > 0);
         assert!(b.state().angular_velocity().raw() < 0);
         assert!(relative_normal_speed(a, Some(b), &contact).abs() <= 1);
+    }
+
+    #[test]
+    fn tangent_impulse_stops_sliding_at_a_rough_static_contact() {
+        let material = Material::new(0.0, 1.0).unwrap();
+        let mut body = circle_body(1, 0.0, 1.0, material);
+        body.state_mut()
+            .set_linear_velocity(LinearVelocity::from_meters_per_second(1.0, -1.0).unwrap());
+
+        let mut world = zero_gravity_world();
+        world.add_body(body).unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::new(Position::from_meters(0.0, -1.0).unwrap(), Angle::ZERO),
+                CompositeCollider::single(
+                    Circle::new(Length::from_meters(0.5).unwrap())
+                        .unwrap()
+                        .into(),
+                )
+                .unwrap(),
+                material,
+            ))
+            .unwrap();
+        let contact = Contact {
+            body_a: BodyId::new(1),
+            body_b: BodyId::new(2),
+            point: Position::from_meters(0.0, -0.5).unwrap().into(),
+            normal: UnitVector::from_raw(0, -(1 << 30)),
+            penetration: Length::ZERO,
+        };
+        world.contacts.push(contact);
+        world.contact_pairs.push(ContactPair {
+            a: 0,
+            b: ContactBodyIndex::Static(0),
+        });
+
+        let mut impulse_states = [ContactImpulseState::default()];
+        world.solve_velocities(&mut impulse_states);
+
+        let body = world.body(BodyId::new(1)).unwrap();
+        assert_eq!(body.state().linear_velocity().raw(), [683, 0]);
+        assert!(body.state().angular_velocity().raw() < 0);
+        assert!(
+            relative_speed_along(body, None, contact.point, contact.normal.perpendicular(),).abs()
+                <= 1
+        );
+
+        let after_first_solve = *body.state();
+        world.solve_velocities(&mut impulse_states);
+        assert_eq!(
+            *world.body(BodyId::new(1)).unwrap().state(),
+            after_first_solve
+        );
+    }
+
+    #[test]
+    fn tangent_impulse_affects_both_dynamic_bodies() {
+        let material = Material::new(0.0, 1.0).unwrap();
+        let mut a = circle_body(1, 0.0, 1.0, material);
+        a.state_mut()
+            .set_linear_velocity(LinearVelocity::from_meters_per_second(1.0, -1.0).unwrap());
+        let mut b = circle_body(2, 0.0, 0.0, material);
+        b.state_mut().set_transform(Transform::new(
+            Position::from_meters(0.0, -1.0).unwrap(),
+            Angle::ZERO,
+        ));
+
+        let mut world = zero_gravity_world();
+        world.add_body(a).unwrap();
+        world.add_body(b).unwrap();
+        let contact = Contact {
+            body_a: BodyId::new(1),
+            body_b: BodyId::new(2),
+            point: Position::from_meters(0.0, -0.5).unwrap().into(),
+            normal: UnitVector::from_raw(0, -(1 << 30)),
+            penetration: Length::ZERO,
+        };
+        world.contacts.push(contact);
+        world.contact_pairs.push(ContactPair {
+            a: 0,
+            b: ContactBodyIndex::Dynamic(1),
+        });
+
+        let mut impulse_states = [ContactImpulseState::default()];
+        world.solve_velocities(&mut impulse_states);
+
+        let a = world.body(BodyId::new(1)).unwrap();
+        let b = world.body(BodyId::new(2)).unwrap();
+        assert_eq!(a.state().linear_velocity().raw(), [853, -512]);
+        assert_eq!(b.state().linear_velocity().raw(), [171, -512]);
+        assert!(a.state().angular_velocity().raw() < 0);
+        assert!(b.state().angular_velocity().raw() < 0);
+        assert!(
+            relative_speed_along(a, Some(b), contact.point, contact.normal.perpendicular(),).abs()
+                <= 1
+        );
+    }
+
+    #[test]
+    fn coulomb_limit_scales_with_normal_impulse() {
+        let inverse_mass = 1_u64 << 24;
+
+        assert_eq!(
+            friction_velocity_change_limit_q10(1 << 13, 1 << 10, inverse_mass, 3 * inverse_mass,),
+            384
+        );
     }
 
     #[test]

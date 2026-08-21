@@ -137,13 +137,19 @@ integral about the body origin, so an offset collider automatically includes
 the parallel-axis contribution. Values outside the fixed-point range saturate;
 zero represents an angularly immovable body at solver precision.
 
-**Restitution [`Material`](iPhysics/src/body/material.rs)** — one `u32` in
-Q16.
+**Material coefficients [`Material`](iPhysics/src/body/material.rs)** —
+restitution and Coulomb friction stored as unsigned Q16 values.
 
-- Resolution: `2^-16`, or `0.0000152588`.
-- Range: `0..=1`.
+- Resolution: `2^-16`, or `0.0000152588` for both coefficients.
+- Restitution range: `0..=1`.
+- Friction range: `0..65,536` (exclusive upper bound); values greater than one
+  are allowed.
 
-Values outside the dimensionless physical interval are rejected.
+Restitution outside its physical interval and negative friction are rejected.
+Contact friction uses the arithmetic mean of the two material coefficients.
+The velocity solver accumulates normal and tangent impulses across its contact
+iterations and clamps the tangent impulse to `|jt| <= friction * jn`.
+`Material::INELASTIC` and `Material::ELASTIC` both use friction `0.5`.
 
 ### Simulation time and effective precision
 

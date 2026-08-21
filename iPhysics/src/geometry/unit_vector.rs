@@ -90,6 +90,15 @@ impl UnitVector {
         [self.x, self.y]
     }
 
+    /// Returns the counter-clockwise perpendicular direction.
+    #[inline(always)]
+    pub(crate) const fn perpendicular(self) -> Self {
+        Self {
+            x: -self.y,
+            y: self.x,
+        }
+    }
+
     pub(crate) fn rotate(self, angle: Angle) -> Self {
         let [sin, cos] = angle.sin_cos_q30();
         let [px, py] = self.raw();
@@ -136,6 +145,7 @@ mod tests {
         assert_eq!(direction.dot(RawVec2::from_i32(3, 4)), 5);
         assert_eq!(direction.cross(RawVec2::from_i32(3, 4)), 0);
         assert_eq!(UnitVector::X.cross(RawVec2::from_i32(3, 4)), 4);
+        assert_eq!(UnitVector::X.perpendicular().raw(), [0, 1 << 30]);
         assert!(UnitVector::normalized(RawVec2::ZERO).is_none());
     }
 
