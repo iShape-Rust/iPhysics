@@ -29,10 +29,10 @@ pub use position::Position;
 pub const TICKS_PER_SECOND: u32 = 64;
 
 pub(crate) const POSITION_FRACTION_BITS: u32 = 16;
-pub(crate) const KINEMATIC_FRACTION_BITS: u32 = 24;
-pub(crate) const ACCELERATION_TO_VELOCITY_SHIFT: u32 = 6;
-pub(crate) const VELOCITY_TO_POSITION_SHIFT: u32 =
-    KINEMATIC_FRACTION_BITS + ACCELERATION_TO_VELOCITY_SHIFT - POSITION_FRACTION_BITS;
+pub(crate) const LINEAR_VELOCITY_FRACTION_BITS: u32 = 10;
+pub(crate) const LINEAR_ACCELERATION_FRACTION_BITS: u32 = 4;
+pub(crate) const ANGULAR_KINEMATIC_FRACTION_BITS: u32 = 24;
+pub(crate) const ANGULAR_ACCELERATION_TO_VELOCITY_SHIFT: u32 = 6;
 
 #[cfg(test)]
 mod tests;

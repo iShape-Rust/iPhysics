@@ -16,20 +16,6 @@ impl ClampToI32 for i64 {
     }
 }
 
-impl ClampToI32 for i128 {
-    #[inline(always)]
-    fn clamp_to_i32(self, min: i32, max: i32) -> i32 {
-        debug_assert!(min <= max);
-        if self < min as i128 {
-            min
-        } else if self > max as i128 {
-            max
-        } else {
-            self as i32
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::ClampToI32;
@@ -45,7 +31,7 @@ mod tests {
             i32::MAX
         );
         assert_eq!(7_i64.clamp_to_i32(-5, 5), 5);
-        assert_eq!((-7_i128).clamp_to_i32(-5, 5), -5);
-        assert_eq!(3_i128.clamp_to_i32(-5, 5), 3);
+        assert_eq!((-7_i64).clamp_to_i32(-5, 5), -5);
+        assert_eq!(3_i64.clamp_to_i32(-5, 5), 3);
     }
 }

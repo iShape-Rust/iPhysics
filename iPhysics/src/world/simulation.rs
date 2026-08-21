@@ -1,13 +1,15 @@
 use super::{ContactBodyIndex, ContactPair, World};
 use crate::body::Body;
-use crate::collision::{Contact, collide};
+use crate::collision::{collide, Contact};
 use crate::quantity::{LinearVelocity, Position};
 use alloc::vec;
 
-const WAKE_SPEED_RAW: i64 = 3_355_443; // 0.2 m/s in Q24
+const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 const POSITION_SLOP_RAW: u32 = 64; // 1/1024 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
+const MAX_RELATIVE_NORMAL_SPEED_RAW: i32 = 4 * LinearVelocity::MAX_VELOCITY;
+const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_NORMAL_SPEED_RAW as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StepStats {
@@ -187,9 +189,8 @@ impl World {
                     self.static_bodies[static_index]
                         .material()
                         .restitution_raw(),
-                ) as i128;
-                let velocity_change =
-                    round_shift(-(normal_speed as i128) * ((1_i128 << 16) + restitution), 16);
+                );
+                let velocity_change = restitution_velocity_change(normal_speed, restitution);
                 let [change_x, change_y] = contact.normal.scaled_wide_raw(velocity_change);
                 add_velocity(a, -change_x, -change_y);
                 continue;
@@ -214,11 +215,10 @@ impl World {
             let restitution = a
                 .material()
                 .restitution_raw()
-                .max(b.material().restitution_raw()) as i128;
-            let velocity_change =
-                round_shift(-(normal_speed as i128) * ((1_i128 << 16) + restitution), 16);
-            let change_a = div_round(velocity_change * inverse_a as i128, inverse_sum as i128);
-            let change_b = div_round(velocity_change * inverse_b as i128, inverse_sum as i128);
+                .max(b.material().restitution_raw());
+            let velocity_change = restitution_velocity_change(normal_speed, restitution);
+            let change_a = div_round(velocity_change * inverse_a, inverse_sum);
+            let change_b = div_round(velocity_change * inverse_b, inverse_sum);
 
             if inverse_a != 0 {
                 let [change_x, change_y] = contact.normal.scaled_wide_raw(change_a);
@@ -245,7 +245,7 @@ impl World {
             }
 
             if let ContactBodyIndex::Static(_) = pair.b {
-                let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as i128);
+                let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as u64);
                 add_position(&mut self.bodies[pair.a], -move_x, -move_y);
                 continue;
             }
@@ -261,8 +261,8 @@ impl World {
                 continue;
             }
 
-            let move_a = div_round(correction as i128 * inverse_a as i128, inverse_sum as i128);
-            let move_b = div_round(correction as i128 * inverse_b as i128, inverse_sum as i128);
+            let move_a = div_round(correction as u64 * inverse_a, inverse_sum);
+            let move_b = div_round(correction as u64 * inverse_b, inverse_sum);
             if inverse_a != 0 {
                 let [move_x, move_y] = contact.normal.scaled_wide_raw(move_a);
                 add_position(a, -move_x, -move_y);
@@ -289,25 +289,25 @@ impl World {
     }
 }
 
-fn relative_normal_speed(a: &Body, b: Option<&Body>, contact: &Contact) -> i64 {
-    let [avx, avy] = a.state().linear_velocity().raw();
-    let [bvx, bvy] = b
-        .map(|body| body.state().linear_velocity().raw())
-        .unwrap_or([0, 0]);
-    contact
-        .normal
-        .dot_wide_raw([bvx as i64 - avx as i64, bvy as i64 - avy as i64])
+fn relative_normal_speed(a: &Body, b: Option<&Body>, contact: &Contact) -> i32 {
+    let av = a.state().linear_velocity();
+    let bv = b
+        .map(|body| body.state().linear_velocity())
+        .unwrap_or(LinearVelocity::ZERO);
+    let speed = contact.normal.dot(bv - av);
+    debug_assert!(speed.unsigned_abs() <= MAX_RELATIVE_NORMAL_SPEED_RAW as u64);
+    speed as i32
 }
 
-fn add_velocity(body: &mut Body, dx: i128, dy: i128) {
+fn add_velocity(body: &mut Body, dx: i64, dy: i64) {
     let [x, y] = body.state().linear_velocity().raw();
     body.state_mut().linear_velocity =
-        LinearVelocity::from_wide_saturated(x as i128 + dx, y as i128 + dy);
+        LinearVelocity::from_wide_saturated(x as i64 + dx, y as i64 + dy);
 }
 
-fn add_position(body: &mut Body, dx: i128, dy: i128) {
+fn add_position(body: &mut Body, dx: i64, dy: i64) {
     let [x, y] = body.state().transform().position.raw();
-    body.state_mut().transform.position = Position::from_i128(x as i128 + dx, y as i128 + dy);
+    body.state_mut().transform.position = Position::from_i64(x as i64 + dx, y as i64 + dy);
 }
 
 fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut Body) {
@@ -317,18 +317,25 @@ fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut B
 }
 
 #[inline(always)]
-fn round_shift(value: i128, shift: u32) -> i128 {
-    let half = 1_i128 << (shift - 1);
-    if value < 0 {
-        -((-value + half) >> shift)
-    } else {
-        (value + half) >> shift
-    }
+fn restitution_velocity_change(normal_speed: i32, restitution: u32) -> u64 {
+    debug_assert!(normal_speed < 0);
+    debug_assert!(restitution <= 1 << 16);
+    let closing_speed = normal_speed.unsigned_abs() as u64;
+    let restitution_factor = (1_u64 << 16) + restitution as u64;
+    let result = round_shift(closing_speed * restitution_factor, 16);
+    debug_assert!(result <= MAX_VELOCITY_CHANGE_RAW);
+    result
 }
 
 #[inline(always)]
-fn div_round(numerator: i128, denominator: i128) -> i128 {
-    debug_assert!(numerator >= 0 && denominator > 0);
+fn round_shift(value: u64, shift: u32) -> u64 {
+    (value + (1_u64 << (shift - 1))) >> shift
+}
+
+#[inline(always)]
+fn div_round(numerator: u64, denominator: u64) -> u64 {
+    debug_assert!(denominator > 0);
+    debug_assert!(numerator <= u64::MAX - (denominator >> 1));
     (numerator + (denominator >> 1)) / denominator
 }
 
@@ -337,6 +344,7 @@ mod tests {
     use super::*;
     use crate::body::{BodyId, BodyState, Material, SleepConfig, StaticBody};
     use crate::collider::{Circle, ColliderPart, CompositeCollider};
+    use crate::geometry::{GeometryPoint, UnitVector};
     use crate::quantity::{Angle, AngularVelocity, Length, LinearAcceleration, Mass};
     use crate::transform::Transform;
     use crate::world::WorldSettings;
@@ -357,6 +365,41 @@ mod tests {
 
     fn zero_gravity_world() -> World {
         World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    }
+
+    #[test]
+    fn relative_speed_subtracts_extreme_velocities_without_overflow() {
+        let mut a = circle_body(1, 0.0, 0.0, Material::INELASTIC);
+        let mut b = circle_body(2, 0.0, 0.0, Material::INELASTIC);
+        a.state_mut()
+            .set_linear_velocity(LinearVelocity::from_raw(i32::MIN, i32::MIN));
+        b.state_mut()
+            .set_linear_velocity(LinearVelocity::from_raw(i32::MAX, i32::MAX));
+        let contact = Contact {
+            body_a: a.id(),
+            body_b: b.id(),
+            point: GeometryPoint::ZERO,
+            normal: UnitVector::from_raw(1 << 30, 1 << 30),
+            penetration: Length::ZERO,
+        };
+
+        assert_eq!(
+            relative_normal_speed(&a, Some(&b), &contact),
+            MAX_RELATIVE_NORMAL_SPEED_RAW
+        );
+    }
+
+    #[test]
+    fn maximum_solver_impulse_fits_u64_chain() {
+        let normal_speed = -MAX_RELATIVE_NORMAL_SPEED_RAW;
+        let impulse =
+            restitution_velocity_change(normal_speed, Material::ELASTIC.restitution_raw());
+        let inverse_mass = u32::MAX as u64;
+        let inverse_sum = 2 * inverse_mass;
+
+        assert_eq!(impulse, MAX_VELOCITY_CHANGE_RAW);
+        assert!(impulse <= u32::MAX as u64);
+        assert_eq!(div_round(impulse * inverse_mass, inverse_sum), impulse / 2);
     }
 
     #[test]

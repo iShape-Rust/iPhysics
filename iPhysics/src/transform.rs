@@ -73,11 +73,11 @@ mod tests {
     #[test]
     fn advances_both_position_and_angle() {
         let transform = Transform::IDENTITY;
-        let linear = LinearVelocity::from_meters_per_second(64.0, -32.0).unwrap();
+        let linear = LinearVelocity::from_meters_per_second(16.0, -8.0).unwrap();
         let angular = AngularVelocity::from_radians_per_second(core::f64::consts::PI).unwrap();
         let next = transform.advance(linear, angular);
 
-        assert_eq!(next.position.to_meters(), [1.0, -0.5]);
+        assert_eq!(next.position.to_meters(), [0.25, -0.125]);
         assert_ne!(next.angle, Angle::ZERO);
     }
 

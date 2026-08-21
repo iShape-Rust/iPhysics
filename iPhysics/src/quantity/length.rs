@@ -1,6 +1,6 @@
 use crate::ops::quantize::Quantize;
 
-use super::{POSITION_FRACTION_BITS, Position};
+use super::{Position, POSITION_FRACTION_BITS};
 
 /// Non-negative length in metres, stored as unsigned Q16.
 ///

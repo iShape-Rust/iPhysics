@@ -1,6 +1,6 @@
+use crate::Angle;
 use crate::ops::shift::RoundShift;
 use crate::quantity::RawVec2;
-use crate::Angle;
 
 /// Dimensionless normalized direction stored as signed Q30 components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,7 +11,11 @@ pub struct UnitVector {
 
 impl UnitVector {
     pub(crate) const FRACTION_BITS: u32 = 30;
-    pub(crate) const X: Self = Self { x: 1 << 30, y: 0 };
+    const MAX_COMPONENT: i32 = 1 << Self::FRACTION_BITS;
+    pub(crate) const X: Self = Self {
+        x: Self::MAX_COMPONENT,
+        y: 0,
+    };
 
     /// Normalizes a non-zero raw vector into a deterministic Q30 direction.
     #[inline]
@@ -54,26 +58,21 @@ impl UnitVector {
         ]
     }
 
-    /// Solver variant for values whose intermediate range requires i128.
+    /// Solver variant for non-negative magnitudes wider than `i32`.
     #[inline(always)]
-    pub(crate) const fn scaled_wide_raw(self, magnitude: i128) -> [i128; 2] {
+    pub(crate) const fn scaled_wide_raw(self, magnitude: u64) -> [i64; 2] {
+        debug_assert!(magnitude <= u32::MAX as u64);
+        let magnitude = magnitude as i64;
         [
-            round_shift_i128(self.x as i128 * magnitude, Self::FRACTION_BITS),
-            round_shift_i128(self.y as i128 * magnitude, Self::FRACTION_BITS),
+            round_shift_i64(self.x as i64 * magnitude, Self::FRACTION_BITS),
+            round_shift_i64(self.y as i64 * magnitude, Self::FRACTION_BITS),
         ]
-    }
-
-    /// Solver projection for differences that do not satisfy RawVec2 bounds.
-    #[inline(always)]
-    pub(crate) const fn dot_wide_raw(self, vector: [i64; 2]) -> i64 {
-        round_shift_i128(
-            vector[0] as i128 * self.x as i128 + vector[1] as i128 * self.y as i128,
-            Self::FRACTION_BITS,
-        ) as i64
     }
 
     #[inline(always)]
     pub(crate) const fn from_raw(x: i32, y: i32) -> Self {
+        debug_assert!(x >= -Self::MAX_COMPONENT && x <= Self::MAX_COMPONENT);
+        debug_assert!(y >= -Self::MAX_COMPONENT && y <= Self::MAX_COMPONENT);
         Self { x, y }
     }
 
@@ -108,16 +107,6 @@ impl core::ops::Neg for UnitVector {
 #[inline(always)]
 const fn round_shift_i64(value: i64, shift: u32) -> i64 {
     let half = 1_i64 << (shift - 1);
-    if value < 0 {
-        -((-value + half) >> shift)
-    } else {
-        (value + half) >> shift
-    }
-}
-
-#[inline(always)]
-const fn round_shift_i128(value: i128, shift: u32) -> i128 {
-    let half = 1_i128 << (shift - 1);
     if value < 0 {
         -((-value + half) >> shift)
     } else {

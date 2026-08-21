@@ -2,7 +2,7 @@ use crate::ops::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
 
 use super::angle::AngleDelta;
 use super::angular_acceleration::AngularAcceleration;
-use super::{ACCELERATION_TO_VELOCITY_SHIFT, KINEMATIC_FRACTION_BITS};
+use super::{ANGULAR_ACCELERATION_TO_VELOCITY_SHIFT, ANGULAR_KINEMATIC_FRACTION_BITS};
 
 // At 64 Hz, Q24 rad/s converts to binary-angle units per tick by multiplying
 // by 2/π. This is 2/π represented as signed Q31.
@@ -16,7 +16,7 @@ const RAD_PER_SECOND_TO_ANGLE_DELTA_Q31: i64 = 1_367_130_551;
 pub struct AngularVelocity(i32);
 
 impl AngularVelocity {
-    pub const FRACTION_BITS: u32 = KINEMATIC_FRACTION_BITS;
+    pub const FRACTION_BITS: u32 = ANGULAR_KINEMATIC_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
     pub const ZERO: Self = Self(0);
 
@@ -60,7 +60,7 @@ impl AngularVelocity {
     /// underlying `i32` storage range.
     #[inline]
     pub fn advance(self, acceleration: AngularAcceleration) -> Self {
-        let delta = (acceleration.raw() as i64).round_shift(ACCELERATION_TO_VELOCITY_SHIFT);
+        let delta = (acceleration.raw() as i64).round_shift(ANGULAR_ACCELERATION_TO_VELOCITY_SHIFT);
         Self::from_i64_saturated(self.0 as i64 + delta)
     }
 

@@ -23,7 +23,7 @@ impl Default for WorldSettings {
     fn default() -> Self {
         Self::new(
             LinearAcceleration::from_meters_per_second_squared(0.0, -10.0)
-                .expect("default gravity must fit Q24"),
+                .expect("default gravity must fit Q4"),
         )
     }
 }

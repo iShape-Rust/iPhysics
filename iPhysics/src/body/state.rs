@@ -1,6 +1,6 @@
 use crate::quantity::{
-    AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity, integrate,
-    integrate_angular,
+    integrate, integrate_angular, AngularAcceleration, AngularVelocity, LinearAcceleration,
+    LinearVelocity,
 };
 use crate::transform::Transform;
 
@@ -15,7 +15,7 @@ pub struct SleepConfig {
 impl SleepConfig {
     /// `0.05 m/s`, `0.1 rad/s`, and 16 ticks (`0.25 s` at 64 Hz).
     pub const FAST_EFFECTS: Self = Self {
-        linear_speed_raw: 838_861,
+        linear_speed_raw: 51,
         angular_speed_raw: 1_677_722,
         required_ticks: 16,
     };

@@ -1,31 +1,56 @@
 use crate::ops::quantize::Quantize;
 
-use super::KINEMATIC_FRACTION_BITS;
+use super::LINEAR_ACCELERATION_FRACTION_BITS;
 
-/// Linear acceleration in metres per second squared, stored as signed Q24 components.
+/// Linear acceleration in metres per second squared, stored as signed Q4 components.
 ///
-/// - Resolution: `2^-24 m/s^2`, approximately `0.000_000_059_6 m/s^2`.
-/// - Storage range per component: `-128 m/s²..128 m/s²` (exclusive upper bound).
+/// - Resolution: `2^-4 m/s²`, or `0.0625 m/s²`.
+/// - Range per component: `-65_536 m/s²..=65_536 m/s²`.
+/// - Raw range: `-2^20..=2^20`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct LinearAcceleration([i32; 2]);
 
 impl LinearAcceleration {
-    pub const FRACTION_BITS: u32 = KINEMATIC_FRACTION_BITS;
+    pub const FRACTION_BITS: u32 = LINEAR_ACCELERATION_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
+    pub(crate) const MIN_ACCELERATION: i32 = -(1 << 20);
+    pub(crate) const MAX_ACCELERATION: i32 = 1 << 20;
     pub const ZERO: Self = Self([0, 0]);
 
     #[inline(always)]
     pub const fn from_raw(x: i32, y: i32) -> Self {
-        Self([x, y])
+        Self([Self::clamp_raw(x), Self::clamp_raw(y)])
     }
 
-    /// Converts metres per second squared to Q24, rounding midpoint values away from zero.
+    #[inline(always)]
+    const fn clamp_raw(value: i32) -> i32 {
+        if value < Self::MIN_ACCELERATION {
+            Self::MIN_ACCELERATION
+        } else if value > Self::MAX_ACCELERATION {
+            Self::MAX_ACCELERATION
+        } else {
+            value
+        }
+    }
+
+    #[inline(always)]
+    const fn checked_from_raw(x: i32, y: i32) -> Option<Self> {
+        let is_x = x >= Self::MIN_ACCELERATION && x <= Self::MAX_ACCELERATION;
+        let is_y = y >= Self::MIN_ACCELERATION && y <= Self::MAX_ACCELERATION;
+        if is_x && is_y {
+            Some(Self([x, y]))
+        } else {
+            None
+        }
+    }
+
+    /// Converts metres per second squared to Q4, rounding midpoint values away from zero.
     #[inline(always)]
     pub fn from_meters_per_second_squared(x: f64, y: f64) -> Option<Self> {
-        Some(Self([
+        Self::checked_from_raw(
             x.quantize(Self::FRACTION_BITS)?,
             y.quantize(Self::FRACTION_BITS)?,
-        ]))
+        )
     }
 
     #[inline(always)]

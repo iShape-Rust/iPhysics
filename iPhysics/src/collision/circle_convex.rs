@@ -1,5 +1,4 @@
 use super::Contact;
-use super::sat::offset;
 use crate::body::BodyId;
 use crate::collider::{Circle, Convex};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -121,6 +120,12 @@ fn build_contact(
         normal,
         penetration: Length::from_raw(penetration),
     }
+}
+
+fn offset(point: GeometryPoint, axis: UnitVector, distance: i32) -> GeometryPoint {
+    let [x, y] = point.raw();
+    let [offset_x, offset_y] = axis.scaled_raw(distance);
+    GeometryPoint::from_i64_unchecked(x as i64 + offset_x, y as i64 + offset_y)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use crate::ops::quantize::Quantize;
 
-use super::KINEMATIC_FRACTION_BITS;
+use super::ANGULAR_KINEMATIC_FRACTION_BITS;
 
 /// Angular acceleration in radians per second squared, stored as signed Q24.
 ///
@@ -10,7 +10,7 @@ use super::KINEMATIC_FRACTION_BITS;
 pub struct AngularAcceleration(i32);
 
 impl AngularAcceleration {
-    pub const FRACTION_BITS: u32 = KINEMATIC_FRACTION_BITS;
+    pub const FRACTION_BITS: u32 = ANGULAR_KINEMATIC_FRACTION_BITS;
     pub const SCALE: i64 = 1_i64 << Self::FRACTION_BITS;
     pub const ZERO: Self = Self(0);
 

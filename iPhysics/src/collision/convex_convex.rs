@@ -1,9 +1,11 @@
 use super::Contact;
-use super::sat::{BestAxis, select_axis, support};
 use crate::body::BodyId;
 use crate::collider::Convex;
+use crate::geometry::{GeometryPoint, UnitVector};
 use crate::quantity::Length;
 use crate::transform::Transform;
+
+type BestAxis = Option<(u32, UnitVector)>;
 
 pub(super) fn collide(
     body_a: BodyId,
@@ -46,10 +48,64 @@ pub(super) fn collide(
     })
 }
 
+fn select_axis(
+    best: &mut BestAxis,
+    axis: UnitVector,
+    a: &[GeometryPoint],
+    b: &[GeometryPoint],
+) -> Option<()> {
+    let (min_a, max_a) = project(a, axis);
+    let (min_b, max_b) = project(b, axis);
+    let move_a_negative = max_a - min_b;
+    let move_a_positive = max_b - min_a;
+    if move_a_negative < 0 || move_a_positive < 0 {
+        return None;
+    }
+
+    if move_a_negative <= move_a_positive {
+        update_best(best, move_a_negative, axis);
+    } else {
+        update_best(best, move_a_positive, -axis);
+    }
+    Some(())
+}
+
+#[inline]
+fn update_best(best: &mut BestAxis, penetration: i64, axis: UnitVector) {
+    let penetration = penetration as u32;
+    if best.is_none_or(|(current, _)| penetration < current) {
+        *best = Some((penetration, axis));
+    }
+}
+
+fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
+    let first = axis.dot(vertices[0].into());
+    let mut min = first;
+    let mut max = first;
+    for &vertex in &vertices[1..] {
+        let projection = axis.dot(vertex.into());
+        min = min.min(projection);
+        max = max.max(projection);
+    }
+    (min, max)
+}
+
+fn support(vertices: &[GeometryPoint], axis: UnitVector, maximum: bool) -> GeometryPoint {
+    let mut result = vertices[0];
+    let mut best = axis.dot(result.into());
+    for &vertex in &vertices[1..] {
+        let projection = axis.dot(vertex.into());
+        if (maximum && projection > best) || (!maximum && projection < best) {
+            result = vertex;
+            best = projection;
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::UnitVector;
     use crate::quantity::{Angle, Position};
 
     fn square(half_extent: f64) -> Convex {

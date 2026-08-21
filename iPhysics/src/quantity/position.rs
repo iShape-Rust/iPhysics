@@ -1,7 +1,7 @@
 use super::linear_velocity::LinearVelocity;
-use super::{POSITION_FRACTION_BITS, VELOCITY_TO_POSITION_SHIFT};
-use crate::ops::{quantize::Quantize, shift::RoundShift};
+use super::POSITION_FRACTION_BITS;
 use crate::geometry::vec::RawVec2;
+use crate::ops::{quantize::Quantize, shift::RoundShift};
 use crate::{Angle, GeometryPoint};
 use i_float::int::point::IntPoint;
 
@@ -34,19 +34,6 @@ impl Position {
     pub(crate) fn from_i64(x: i64, y: i64) -> Self {
         let x = x.clamp(Position::MIN_POSITION as i64, Position::MAX_POSITION as i64);
         let y = y.clamp(Position::MIN_POSITION as i64, Position::MAX_POSITION as i64);
-        Self([x as i32, y as i32])
-    }
-
-    #[inline(always)]
-    pub(crate) fn from_i128(x: i128, y: i128) -> Self {
-        let x = x.clamp(
-            Position::MIN_POSITION as i128,
-            Position::MAX_POSITION as i128,
-        );
-        let y = y.clamp(
-            Position::MIN_POSITION as i128,
-            Position::MAX_POSITION as i128,
-        );
         Self([x as i32, y as i32])
     }
 
@@ -106,10 +93,7 @@ impl Position {
     pub fn advance(self, velocity: LinearVelocity) -> Self {
         let [x, y] = self.raw();
         let [vx, vy] = velocity.raw();
-        Self::from_i64(
-            x as i64 + (vx as i64).round_shift(VELOCITY_TO_POSITION_SHIFT),
-            y as i64 + (vy as i64).round_shift(VELOCITY_TO_POSITION_SHIFT),
-        )
+        Self::from_i32(x + vx, y + vy)
     }
 
     /// Returns the component-wise midpoint, which remains inside the world.

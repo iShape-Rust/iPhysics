@@ -1,36 +1,53 @@
-use crate::ops::shift::RoundShift;
-
 use super::{
-    Angle, AngleDelta, AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity,
-    Position, integrate, integrate_angular,
+    integrate, integrate_angular, Angle, AngleDelta, AngularAcceleration, AngularVelocity,
+    LinearAcceleration, LinearVelocity, Position,
 };
 
 #[test]
 fn expected_values_fit_the_formats() {
     let position = Position::from_meters(8_000.0, -8_000.0).unwrap();
-    let velocity = LinearVelocity::from_meters_per_second(100.0, -100.0).unwrap();
+    let velocity = LinearVelocity::from_meters_per_second(25.0, -25.0).unwrap();
     let acceleration = LinearAcceleration::from_meters_per_second_squared(100.0, -100.0).unwrap();
 
     assert_eq!(position.raw(), [524_288_000, -524_288_000]);
-    assert_eq!(velocity.raw(), [1_677_721_600, -1_677_721_600]);
-    assert_eq!(acceleration.raw(), velocity.raw());
+    assert_eq!(velocity.raw(), [25_600, -25_600]);
+    assert_eq!(acceleration.raw(), [1_600, -1_600]);
 }
 
 #[test]
-fn linear_quantities_use_full_q24_range() {
+fn linear_velocity_enforces_bounded_q10_range() {
+    let min = LinearVelocity::from_raw(i32::MIN, i32::MIN);
+    let max = LinearVelocity::from_raw(i32::MAX, i32::MAX);
+
     assert_eq!(
         LinearVelocity::from_raw(i32::MIN, i32::MAX).raw(),
-        [i32::MIN, i32::MAX]
+        [LinearVelocity::MIN_VELOCITY, LinearVelocity::MAX_VELOCITY]
     );
     assert_eq!(
-        LinearAcceleration::from_raw(i32::MIN, i32::MAX).raw(),
-        [i32::MIN, i32::MAX]
+        (max - min).raw(),
+        [
+            2 * LinearVelocity::MAX_VELOCITY,
+            2 * LinearVelocity::MAX_VELOCITY
+        ]
     );
-    assert!(LinearVelocity::from_meters_per_second(-128.0, 0.0).is_some());
-    assert!(LinearVelocity::from_meters_per_second(128.0, 0.0).is_none());
-    assert!(LinearAcceleration::from_meters_per_second_squared(-128.0, 0.0).is_some());
-    assert!(LinearAcceleration::from_meters_per_second_squared(128.0, 0.0).is_none());
+    assert!(LinearVelocity::from_meters_per_second(-1_024.0, 0.0).is_some());
+    assert!(LinearVelocity::from_meters_per_second(1_024.0, 0.0).is_some());
+    assert!(LinearVelocity::from_meters_per_second(1_025.0, 0.0).is_none());
     assert!(LinearVelocity::from_meters_per_second(f64::NAN, 0.0).is_none());
+}
+
+#[test]
+fn linear_acceleration_enforces_bounded_q4_range() {
+    assert_eq!(
+        LinearAcceleration::from_raw(i32::MIN, i32::MAX).raw(),
+        [
+            LinearAcceleration::MIN_ACCELERATION,
+            LinearAcceleration::MAX_ACCELERATION
+        ]
+    );
+    assert!(LinearAcceleration::from_meters_per_second_squared(-65_536.0, 0.0).is_some());
+    assert!(LinearAcceleration::from_meters_per_second_squared(65_536.0, 0.0).is_some());
+    assert!(LinearAcceleration::from_meters_per_second_squared(65_537.0, 0.0).is_none());
 }
 
 #[test]
@@ -55,14 +72,21 @@ fn integrates_acceleration_before_position() {
 }
 
 #[test]
-fn rounds_small_motion_symmetrically() {
+fn raw_linear_units_integrate_directly() {
+    let acceleration = LinearAcceleration::from_raw(1, -1);
+    let (position, velocity) = integrate(Position::ZERO, LinearVelocity::ZERO, acceleration);
+
+    assert_eq!(velocity.raw(), [1, -1]);
+    assert_eq!(position.raw(), [1, -1]);
+}
+
+#[test]
+fn quantizes_small_motion_symmetrically() {
     let positive = LinearVelocity::from_meters_per_second(0.001, 0.0).unwrap();
     let negative = LinearVelocity::from_meters_per_second(-0.001, 0.0).unwrap();
 
     assert_eq!(Position::ZERO.advance(positive).raw()[0], 1);
     assert_eq!(Position::ZERO.advance(negative).raw()[0], -1);
-    assert_eq!(8_i64.round_shift(4), 1);
-    assert_eq!((-8_i64).round_shift(4), -1);
 }
 
 #[test]
@@ -148,9 +172,12 @@ fn velocity_integration_saturates_at_storage_limit() {
     let velocity = LinearVelocity::from_raw(i32::MAX, i32::MIN);
     let acceleration = LinearAcceleration::from_raw(i32::MAX, i32::MIN);
 
-    assert_eq!(velocity.advance(acceleration).raw(), [i32::MAX, i32::MIN]);
+    assert_eq!(
+        velocity.advance(acceleration).raw(),
+        [LinearVelocity::MAX_VELOCITY, LinearVelocity::MIN_VELOCITY]
+    );
     assert_eq!(
         LinearVelocity::from_raw(i32::MIN, i32::MIN).raw_sqr_magnitude(),
-        1_u64 << 63
+        2 * (LinearVelocity::MAX_VELOCITY as u64).pow(2)
     );
 }
