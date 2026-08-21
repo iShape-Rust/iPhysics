@@ -116,16 +116,10 @@ fn build_contact(
     Contact {
         body_a: circle_body,
         body_b: convex_body,
-        point: offset(circle_center, normal, contact_offset),
+        point: circle_center.offset(normal, contact_offset),
         normal,
         penetration: Length::from_raw(penetration),
     }
-}
-
-fn offset(point: GeometryPoint, axis: UnitVector, distance: i32) -> GeometryPoint {
-    let [x, y] = point.raw();
-    let [offset_x, offset_y] = axis.scaled_raw(distance);
-    GeometryPoint::from_i64_unchecked(x as i64 + offset_x, y as i64 + offset_y)
 }
 
 #[cfg(test)]

@@ -2,7 +2,10 @@ use crate::ops::{clamp::ClampToI32, quantize::Quantize, shift::RoundShift};
 
 use super::angle::AngleDelta;
 use super::angular_acceleration::AngularAcceleration;
-use super::{ANGULAR_ACCELERATION_TO_VELOCITY_SHIFT, ANGULAR_KINEMATIC_FRACTION_BITS};
+use super::{
+    ANGULAR_ACCELERATION_TO_VELOCITY_SHIFT, ANGULAR_KINEMATIC_FRACTION_BITS,
+    LINEAR_VELOCITY_FRACTION_BITS, POSITION_FRACTION_BITS,
+};
 
 // At 64 Hz, Q24 rad/s converts to binary-angle units per tick by multiplying
 // by 2/π. This is 2/π represented as signed Q31.
@@ -69,5 +72,14 @@ impl AngularVelocity {
     pub fn angle_delta_per_tick(self) -> AngleDelta {
         let product = self.0 as i64 * RAD_PER_SECOND_TO_ANGLE_DELTA_Q31;
         AngleDelta::from_raw(product.round_shift(31) as i32)
+    }
+
+    /// Converts `omega * (r x n)` into the Q10 linear speed of a point along
+    /// an arbitrary direction. The lever projection is expressed in Q16.
+    #[inline(always)]
+    pub(crate) fn projected_point_speed_raw(self, lever_cross_direction_q16: i64) -> i64 {
+        const SHIFT: u32 = ANGULAR_KINEMATIC_FRACTION_BITS + POSITION_FRACTION_BITS
+            - LINEAR_VELOCITY_FRACTION_BITS;
+        (self.0 as i64 * lever_cross_direction_q16).round_shift(SHIFT)
     }
 }

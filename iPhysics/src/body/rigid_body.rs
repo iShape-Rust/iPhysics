@@ -9,6 +9,7 @@ pub struct Body {
     collider: Collider,
     material: Material,
     inverse_mass_q24: u32,
+    inverse_inertia_q40: u64,
     state: BodyState,
 }
 
@@ -21,11 +22,14 @@ impl Body {
         material: Material,
         state: BodyState,
     ) -> Self {
+        let collider = collider.into();
+        let inverse_mass_q24 = mass.inverse_q24();
         Self {
             id,
-            collider: collider.into(),
+            collider,
             material,
-            inverse_mass_q24: mass.inverse_q24(),
+            inverse_mass_q24,
+            inverse_inertia_q40: collider.inverse_inertia_q40(inverse_mass_q24),
             state,
         }
     }
@@ -61,6 +65,16 @@ impl Body {
             0
         } else {
             self.inverse_mass_q24
+        }
+    }
+
+    /// Reciprocal moment of inertia in `(kg * m^2)^-1`, stored as unsigned Q40.
+    #[inline(always)]
+    pub(crate) const fn inverse_inertia_q40(&self) -> u64 {
+        if self.state.is_sleeping() {
+            0
+        } else {
+            self.inverse_inertia_q40
         }
     }
 }

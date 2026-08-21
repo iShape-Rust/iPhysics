@@ -126,6 +126,17 @@ Mass is converted once to unsigned Q24 inverse mass for the solver. Masses up
 to approximately `0.00390625 kg` saturate to the maximum inverse mass; this is
 below the intended minimum gameplay mass of roughly `0.01 kg`.
 
+**Inverse moment of inertia** is derived once from a body's mass and collider
+and cached privately on the body as unsigned Q40 in `(kg·m²)⁻¹`.
+
+- Resolution: `2^-40 (kg·m²)⁻¹`, approximately `9.09e-13 (kg·m²)⁻¹`.
+- Range: `0..16,777,216 (kg·m²)⁻¹` (exclusive upper bound).
+
+Circles use `I / m = r² / 2`. Convex colliders use the uniform-polygon area
+integral about the body origin, so an offset collider automatically includes
+the parallel-axis contribution. Values outside the fixed-point range saturate;
+zero represents an angularly immovable body at solver precision.
+
 **Restitution [`Material`](iPhysics/src/body/material.rs)** — one `u32` in
 Q16.
 
@@ -184,8 +195,6 @@ gameplay scale while keeping common geometry products in `i64`.
 
 ## Not implemented yet
 
-Moment of inertia and torque do not currently have a stored physical type.
-Angular velocity can be integrated explicitly, but collision impulses do not
-yet generate angular response from contact lever arms. A future inertia format
-should be selected together with that solver work rather than documenting a
-range the engine does not enforce.
+External torque does not yet have a stored physical type or public force API.
+Collision impulses do account for angular contact velocity, moment of inertia,
+and contact lever arms.

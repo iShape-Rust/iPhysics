@@ -1,6 +1,7 @@
 mod circle;
 mod composite;
 mod convex;
+mod inertia;
 
 use crate::geometry::Aabb;
 use crate::transform::Transform;
@@ -42,6 +43,18 @@ impl Collider {
         match self {
             Self::Circle(_) => None,
             Self::Convex(convex) => Some(convex),
+        }
+    }
+
+    /// Reciprocal moment of inertia about the collider origin as unsigned Q40.
+    ///
+    /// The result is derived once when a dynamic body is built. `inverse_mass_q24`
+    /// is used instead of the source mass so linear and angular solver weights
+    /// share the same low-mass saturation policy.
+    pub(crate) fn inverse_inertia_q40(self, inverse_mass_q24: u32) -> u64 {
+        match self {
+            Self::Circle(circle) => circle.inverse_inertia_q40(inverse_mass_q24),
+            Self::Convex(convex) => convex.inverse_inertia_q40(inverse_mass_q24),
         }
     }
 }

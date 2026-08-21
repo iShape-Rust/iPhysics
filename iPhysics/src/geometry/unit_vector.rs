@@ -49,6 +49,15 @@ impl UnitVector {
         )
     }
 
+    /// Computes `self x vector`, preserving the vector's fixed-point scale.
+    #[inline(always)]
+    pub(crate) fn cross(self, vector: RawVec2) -> i64 {
+        round_shift_i64(
+            RawVec2::from_i32(self.x, self.y).cross(vector),
+            Self::FRACTION_BITS,
+        )
+    }
+
     /// Scales this direction by a bounded raw magnitude.
     #[inline(always)]
     pub(crate) fn scaled_raw(self, magnitude: i32) -> [i64; 2] {
@@ -125,6 +134,8 @@ mod tests {
         assert_eq!(direction.raw(), [644_245_094, 858_993_459]);
         assert_eq!(direction.scaled_raw(10), [6, 8]);
         assert_eq!(direction.dot(RawVec2::from_i32(3, 4)), 5);
+        assert_eq!(direction.cross(RawVec2::from_i32(3, 4)), 0);
+        assert_eq!(UnitVector::X.cross(RawVec2::from_i32(3, 4)), 4);
         assert!(UnitVector::normalized(RawVec2::ZERO).is_none());
     }
 

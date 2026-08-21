@@ -2,6 +2,8 @@ use crate::geometry::{Aabb, GeometryPoint, UnitVector};
 use crate::quantity::{Position, RawVec2};
 use crate::transform::Transform;
 
+use super::inertia::from_q24_per_q32_ratio;
+
 pub const MAX_CONVEX_VERTICES: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +132,32 @@ impl Convex {
         }
         result
     }
+
+    /// Reciprocal moment of inertia of a uniform polygon about the local
+    /// origin, stored as unsigned Q40.
+    pub(crate) fn inverse_inertia_q40(self, inverse_mass_q24: u32) -> u64 {
+        let vertices = self.vertices();
+        let mut twice_area = 0_i128;
+        let mut inertia_numerator = 0_i128;
+
+        // I / m = sum(cross * quadratic) / (6 * sum(cross)).
+        for index in 0..vertices.len() {
+            let a = vertices[index] - Position::ZERO;
+            let b = vertices[(index + 1) % vertices.len()] - Position::ZERO;
+            let cross = a.cross(b) as i128;
+            let quadratic = (a.dot(a) + a.dot(b) + b.dot(b)) as i128;
+            twice_area += cross;
+            inertia_numerator += cross * quadratic;
+        }
+
+        debug_assert!(twice_area > 0);
+        debug_assert!(inertia_numerator > 0);
+
+        from_q24_per_q32_ratio(
+            inverse_mass_q24 as u128 * 6 * twice_area as u128,
+            inertia_numerator as u128,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -222,7 +250,7 @@ fn winding_unchecked(vertices: &[Position]) -> i8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quantity::Angle;
+    use crate::quantity::{Angle, Mass};
 
     #[test]
     fn canonicalizes_clockwise_vertices() {
@@ -370,5 +398,39 @@ mod tests {
             let [x, y] = point.raw();
             x >= 0 && y >= 0
         }));
+    }
+
+    #[test]
+    fn square_inverse_inertia_is_three_halves_for_unit_mass() {
+        let convex = Convex::new(&[
+            Position::from_meters(-1.0, -1.0).unwrap(),
+            Position::from_meters(1.0, -1.0).unwrap(),
+            Position::from_meters(1.0, 1.0).unwrap(),
+            Position::from_meters(-1.0, 1.0).unwrap(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            convex.inverse_inertia_q40(Mass::ONE.inverse_q24()),
+            3_u64 << 39
+        );
+    }
+
+    #[test]
+    fn shifted_polygon_includes_parallel_axis_term() {
+        let convex = Convex::new(&[
+            Position::from_meters(1.0, -1.0).unwrap(),
+            Position::from_meters(3.0, -1.0).unwrap(),
+            Position::from_meters(3.0, 1.0).unwrap(),
+            Position::from_meters(1.0, 1.0).unwrap(),
+        ])
+        .unwrap();
+
+        // I / m = 2/3 + 2^2 = 14/3, hence inverse I = 3/14.
+        let expected = ((3_u128 << 40) + 7) / 14;
+        assert_eq!(
+            convex.inverse_inertia_q40(Mass::ONE.inverse_q24()),
+            expected as u64
+        );
     }
 }

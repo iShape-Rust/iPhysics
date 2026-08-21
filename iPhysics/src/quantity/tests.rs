@@ -1,6 +1,6 @@
 use super::{
-    integrate, integrate_angular, Angle, AngleDelta, AngularAcceleration, AngularVelocity,
-    LinearAcceleration, LinearVelocity, Position,
+    Angle, AngleDelta, AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity,
+    Position, integrate, integrate_angular,
 };
 
 #[test]
@@ -137,6 +137,21 @@ fn angular_velocity_conversion_is_symmetric() {
     assert_eq!(
         positive.angle_delta_per_tick().raw(),
         -negative.angle_delta_per_tick().raw()
+    );
+}
+
+#[test]
+fn angular_velocity_projects_lever_into_linear_speed_scale() {
+    let velocity = AngularVelocity::from_radians_per_second(2.0).unwrap();
+    let half_meter_q16 = Position::SCALE / 2;
+
+    assert_eq!(
+        velocity.projected_point_speed_raw(half_meter_q16),
+        LinearVelocity::SCALE
+    );
+    assert_eq!(
+        velocity.projected_point_speed_raw(-half_meter_q16),
+        -LinearVelocity::SCALE
     );
 }
 

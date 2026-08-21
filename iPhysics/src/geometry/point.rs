@@ -1,3 +1,4 @@
+use super::UnitVector;
 use crate::quantity::{Position, RawVec2};
 use i_float::int::point::IntPoint;
 
@@ -57,6 +58,14 @@ impl GeometryPoint {
         Self::from_i32_unchecked((self.x + other.x) / 2, (self.y + other.y) / 2)
     }
 
+    /// Offsets this point along a Q30 unit direction by a distance expressed
+    /// in the point's Q16 scale.
+    #[inline(always)]
+    pub(crate) fn offset(self, direction: UnitVector, distance: i32) -> Self {
+        let [dx, dy] = direction.scaled_raw(distance);
+        Self::from_i64_unchecked(self.x as i64 + dx, self.y as i64 + dy)
+    }
+
     #[cfg(test)]
     #[inline(always)]
     pub(crate) fn squared_distance(self, other: Self) -> u64 {
@@ -113,6 +122,13 @@ mod tests {
         let b = GeometryPoint::from_i32_unchecked(Position::MAX_POINT - 2, Position::MIN_POINT);
 
         assert_eq!(a.midpoint(b).raw(), [Position::MAX_POINT - 1, 0]);
+    }
+
+    #[test]
+    fn offsets_along_unit_direction_without_leaking_q30() {
+        let point = GeometryPoint::from_i32_unchecked(10, 20);
+
+        assert_eq!(point.offset(UnitVector::X, 5).raw(), [15, 20]);
     }
 
     #[test]

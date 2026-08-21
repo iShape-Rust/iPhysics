@@ -1,6 +1,8 @@
 use crate::geometry::Aabb;
 use crate::quantity::{Length, Position};
 
+use super::inertia::from_q24_per_q32_ratio;
+
 /// Circle centered at its collider transform origin.
 ///
 /// Radius is limited to `Position::MAX_POS` in Q16 so two radii, their square,
@@ -25,6 +27,14 @@ impl Circle {
         self.radius
     }
 
+    /// Reciprocal moment of inertia about the circle center as unsigned Q40.
+    #[inline(always)]
+    pub(crate) fn inverse_inertia_q40(self, inverse_mass_q24: u32) -> u64 {
+        // I / m = r^2 / 2.
+        let radius = self.radius.raw() as u128;
+        from_q24_per_q32_ratio(2 * inverse_mass_q24 as u128, radius * radius)
+    }
+
     #[inline]
     pub(crate) fn aabb(self, center: Position) -> Aabb {
         let [x, y] = center.raw();
@@ -38,6 +48,7 @@ impl Circle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quantity::Mass;
 
     #[test]
     fn radius_respects_world_limit() {
@@ -54,5 +65,15 @@ mod tests {
 
         assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POSITION);
         assert!(aabb.max().raw()[0] > Position::MAX_POSITION);
+    }
+
+    #[test]
+    fn inverse_inertia_uses_radius_and_mass() {
+        let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
+
+        assert_eq!(
+            circle.inverse_inertia_q40(Mass::ONE.inverse_q24()),
+            2_u64 << 40
+        );
     }
 }

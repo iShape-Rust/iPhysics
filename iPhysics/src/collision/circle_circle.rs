@@ -15,7 +15,6 @@ pub fn collide(
     circle_b: Circle,
     center_b: Position,
 ) -> Option<Contact> {
-    let [ax, ay] = center_a.raw();
     let delta = center_b - center_a;
     let distance_squared = delta.squared_magnitude();
     let radius_sum = circle_a.radius().raw() as u64 + circle_b.radius().raw() as u64;
@@ -30,11 +29,10 @@ pub fn collide(
     let penetration = radius_sum - distance;
     let penetration_raw = penetration as u32;
     let contact_offset = circle_a.radius().raw() as i32 - (penetration_raw / 2) as i32;
-    let [offset_x, offset_y] = normal.scaled_raw(contact_offset);
     Some(Contact {
         body_a,
         body_b,
-        point: GeometryPoint::from_i64_unchecked(ax as i64 + offset_x, ay as i64 + offset_y),
+        point: GeometryPoint::from(center_a).offset(normal, contact_offset),
         normal,
         penetration: Length::from_raw(penetration_raw),
     })
