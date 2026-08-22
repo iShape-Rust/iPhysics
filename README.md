@@ -126,6 +126,15 @@ Mass is converted once to unsigned Q24 inverse mass for the solver. Masses up
 to approximately `0.00390625 kg` saturate to the maximum inverse mass; this is
 below the intended minimum gameplay mass of roughly `0.01 kg`.
 
+**[`Force`](iPhysics/src/quantity/force.rs)** — a non-negative force stored as
+unsigned Q16 newtons.
+
+- Resolution: `2^-16 N`, or approximately `0.0000153 N`.
+- Range: `0 N..65,536 N` (exclusive upper bound).
+
+At 64 Hz, a force limit converts to the mouse-joint impulse limit with an
+exact power-of-two scale change: `max_impulse = max_force / 64`.
+
 **Inverse moment of inertia** is derived once from a body's mass and collider
 and cached privately on the body as unsigned Q40 in `(kg·m²)⁻¹`.
 
@@ -182,6 +191,47 @@ Consequently, the smallest stored values remain observable across quantities:
 Every non-zero stored linear velocity moves the body. Small debris still
 settles through the explicit sleep thresholds rather than through discarded
 sub-position motion.
+
+### Velocity damping
+
+`WorldSettings::linear_damping` and `WorldSettings::angular_damping` specify
+the fraction of velocity lost during each fixed `1 / 64 s` tick. A coefficient
+of zero preserves velocity, while one removes it completely. Both coefficients
+default to approximately `0.001` per tick.
+
+The complementary retention multiplier is stored internally as unsigned Q16.
+Damping is applied before gravity and the constraint solvers, with fixed-point
+results truncated toward zero so the smallest velocities cannot persist
+indefinitely because of rounding.
+
+## Mouse joints
+
+`MouseJoint` pulls a body-local anchor toward a mutable world-space target.
+The constraint participates in the iterative velocity solver, accounts for
+both mass and rotational inertia, wakes its body, and limits the accumulated
+impulse to `max_force / 64` on every tick.
+
+```rust
+let body_id = BodyId::new(1);
+let pointer = Position::from_meters(2.0, 3.0).unwrap();
+let transform = world.body(body_id).unwrap().state().transform();
+let joint = MouseJoint::at_world_point(
+    body_id,
+    transform,
+    pointer,
+    Force::from_newtons(100.0).unwrap(),
+);
+world.add_mouse_joint(joint).unwrap();
+
+// Before subsequent fixed ticks:
+world.mouse_joint_mut(body_id).unwrap().set_target(pointer);
+
+// On pointer release:
+world.remove_mouse_joint(body_id);
+```
+
+The debug application implements this flow with left-button dragging and
+draws the active anchor-to-target constraint.
 
 ## Geometry invariants
 

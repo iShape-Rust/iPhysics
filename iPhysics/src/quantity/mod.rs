@@ -7,6 +7,8 @@
 mod angle;
 mod angular_acceleration;
 mod angular_velocity;
+mod damping;
+mod force;
 mod integration;
 mod length;
 mod linear_acceleration;
@@ -18,6 +20,8 @@ pub(crate) use crate::geometry::vec::RawVec2;
 pub use angle::{Angle, AngleDelta};
 pub use angular_acceleration::AngularAcceleration;
 pub use angular_velocity::AngularVelocity;
+pub use damping::Damping;
+pub use force::Force;
 pub use integration::{integrate, integrate_angular};
 pub use length::Length;
 pub use linear_acceleration::LinearAcceleration;

@@ -3,6 +3,7 @@ mod simulation;
 
 use crate::body::{Body, BodyId, StaticBody};
 use crate::collision::Contact;
+use crate::joint::{DistanceJoint, MouseJoint, RopeJoint};
 use alloc::vec::Vec;
 
 pub use settings::WorldSettings;
@@ -11,6 +12,20 @@ pub use simulation::StepStats;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddBodyError {
     DuplicateId(BodyId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddMouseJointError {
+    BodyNotFound(BodyId),
+    DuplicateBody(BodyId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddJointError {
+    BodyNotFound(BodyId),
+    SameBody(BodyId),
+    StaticPair(BodyId, BodyId),
+    DuplicatePair(BodyId, BodyId),
 }
 
 /// Deterministic collection of classical rigid bodies.
@@ -24,6 +39,9 @@ pub struct World {
     static_bodies: Vec<StaticBody>,
     contacts: Vec<Contact>,
     contact_pairs: Vec<ContactPair>,
+    mouse_joints: Vec<MouseJoint>,
+    distance_joints: Vec<DistanceJoint>,
+    rope_joints: Vec<RopeJoint>,
 }
 
 /// Solver-only body lookup kept parallel to `contacts`; it intentionally has
@@ -51,6 +69,9 @@ impl World {
             static_bodies: Vec::new(),
             contacts: Vec::new(),
             contact_pairs: Vec::new(),
+            mouse_joints: Vec::new(),
+            distance_joints: Vec::new(),
+            rope_joints: Vec::new(),
         }
     }
 
@@ -79,6 +100,89 @@ impl World {
     #[inline(always)]
     pub fn contacts(&self) -> &[Contact] {
         &self.contacts
+    }
+
+    /// Returns mouse joints in ascending body-ID order.
+    #[inline(always)]
+    pub fn mouse_joints(&self) -> &[MouseJoint] {
+        &self.mouse_joints
+    }
+
+    #[inline]
+    pub fn mouse_joint(&self, body: BodyId) -> Option<&MouseJoint> {
+        let index = self
+            .mouse_joints
+            .binary_search_by_key(&body, |joint| joint.body())
+            .ok()?;
+        Some(&self.mouse_joints[index])
+    }
+
+    #[inline]
+    pub fn mouse_joint_mut(&mut self, body: BodyId) -> Option<&mut MouseJoint> {
+        let index = self
+            .mouse_joints
+            .binary_search_by_key(&body, |joint| joint.body())
+            .ok()?;
+        self.wake_body(body);
+        Some(&mut self.mouse_joints[index])
+    }
+
+    /// Returns distance joints in canonical ascending endpoint order.
+    #[inline(always)]
+    pub fn distance_joints(&self) -> &[DistanceJoint] {
+        &self.distance_joints
+    }
+
+    #[inline]
+    pub fn distance_joint(&self, body_a: BodyId, body_b: BodyId) -> Option<&DistanceJoint> {
+        let key = canonical_pair(body_a, body_b);
+        let index = self
+            .distance_joints
+            .binary_search_by_key(&key, |joint| (joint.body_a(), joint.body_b()))
+            .ok()?;
+        Some(&self.distance_joints[index])
+    }
+
+    #[inline]
+    pub fn distance_joint_mut(
+        &mut self,
+        body_a: BodyId,
+        body_b: BodyId,
+    ) -> Option<&mut DistanceJoint> {
+        let key = canonical_pair(body_a, body_b);
+        let index = self
+            .distance_joints
+            .binary_search_by_key(&key, |joint| (joint.body_a(), joint.body_b()))
+            .ok()?;
+        self.wake_joint_bodies(key.0, key.1);
+        Some(&mut self.distance_joints[index])
+    }
+
+    /// Returns rope joints in canonical ascending endpoint order.
+    #[inline(always)]
+    pub fn rope_joints(&self) -> &[RopeJoint] {
+        &self.rope_joints
+    }
+
+    #[inline]
+    pub fn rope_joint(&self, body_a: BodyId, body_b: BodyId) -> Option<&RopeJoint> {
+        let key = canonical_pair(body_a, body_b);
+        let index = self
+            .rope_joints
+            .binary_search_by_key(&key, |joint| (joint.body_a(), joint.body_b()))
+            .ok()?;
+        Some(&self.rope_joints[index])
+    }
+
+    #[inline]
+    pub fn rope_joint_mut(&mut self, body_a: BodyId, body_b: BodyId) -> Option<&mut RopeJoint> {
+        let key = canonical_pair(body_a, body_b);
+        let index = self
+            .rope_joints
+            .binary_search_by_key(&key, |joint| (joint.body_a(), joint.body_b()))
+            .ok()?;
+        self.wake_joint_bodies(key.0, key.1);
+        Some(&mut self.rope_joints[index])
     }
 
     #[inline]
@@ -138,9 +242,96 @@ impl World {
 
     pub fn remove_body(&mut self, id: BodyId) -> Option<Body> {
         let index = self.bodies.binary_search_by_key(&id, Body::id).ok()?;
+        self.remove_joints_for_body(id);
         let body = self.bodies.remove(index);
         self.clear_contacts();
         Some(body)
+    }
+
+    /// Adds one mouse joint for a dynamic body.
+    pub fn add_mouse_joint(&mut self, joint: MouseJoint) -> Result<(), AddMouseJointError> {
+        if self.body(joint.body()).is_none() {
+            return Err(AddMouseJointError::BodyNotFound(joint.body()));
+        }
+        match self
+            .mouse_joints
+            .binary_search_by_key(&joint.body(), |item| item.body())
+        {
+            Ok(_) => Err(AddMouseJointError::DuplicateBody(joint.body())),
+            Err(index) => {
+                self.mouse_joints.insert(index, joint);
+                self.wake_body(joint.body());
+                Ok(())
+            }
+        }
+    }
+
+    pub fn remove_mouse_joint(&mut self, body: BodyId) -> Option<MouseJoint> {
+        let index = self
+            .mouse_joints
+            .binary_search_by_key(&body, |joint| joint.body())
+            .ok()?;
+        let joint = self.mouse_joints.remove(index);
+        self.wake_body(body);
+        Some(joint)
+    }
+
+    pub fn add_distance_joint(&mut self, joint: DistanceJoint) -> Result<(), AddJointError> {
+        self.validate_joint_pair(joint.body_a(), joint.body_b())?;
+        let key = (joint.body_a(), joint.body_b());
+        match self
+            .distance_joints
+            .binary_search_by_key(&key, |item| (item.body_a(), item.body_b()))
+        {
+            Ok(_) => Err(AddJointError::DuplicatePair(key.0, key.1)),
+            Err(index) => {
+                self.distance_joints.insert(index, joint);
+                self.wake_joint_bodies(key.0, key.1);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn remove_distance_joint(
+        &mut self,
+        body_a: BodyId,
+        body_b: BodyId,
+    ) -> Option<DistanceJoint> {
+        let key = canonical_pair(body_a, body_b);
+        let index = self
+            .distance_joints
+            .binary_search_by_key(&key, |joint| (joint.body_a(), joint.body_b()))
+            .ok()?;
+        let joint = self.distance_joints.remove(index);
+        self.wake_joint_bodies(key.0, key.1);
+        Some(joint)
+    }
+
+    pub fn add_rope_joint(&mut self, joint: RopeJoint) -> Result<(), AddJointError> {
+        self.validate_joint_pair(joint.body_a(), joint.body_b())?;
+        let key = (joint.body_a(), joint.body_b());
+        match self
+            .rope_joints
+            .binary_search_by_key(&key, |item| (item.body_a(), item.body_b()))
+        {
+            Ok(_) => Err(AddJointError::DuplicatePair(key.0, key.1)),
+            Err(index) => {
+                self.rope_joints.insert(index, joint);
+                self.wake_joint_bodies(key.0, key.1);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn remove_rope_joint(&mut self, body_a: BodyId, body_b: BodyId) -> Option<RopeJoint> {
+        let key = canonical_pair(body_a, body_b);
+        let index = self
+            .rope_joints
+            .binary_search_by_key(&key, |joint| (joint.body_a(), joint.body_b()))
+            .ok()?;
+        let joint = self.rope_joints.remove(index);
+        self.wake_joint_bodies(key.0, key.1);
+        Some(joint)
     }
 
     pub fn remove_static_body(&mut self, id: BodyId) -> Option<StaticBody> {
@@ -148,6 +339,7 @@ impl World {
             .static_bodies
             .binary_search_by_key(&id, StaticBody::id)
             .ok()?;
+        self.remove_joints_for_body(id);
         let body = self.static_bodies.remove(index);
         self.clear_contacts();
         Some(body)
@@ -157,6 +349,57 @@ impl World {
         self.contacts.clear();
         self.contact_pairs.clear();
     }
+
+    fn validate_joint_pair(&self, body_a: BodyId, body_b: BodyId) -> Result<(), AddJointError> {
+        if body_a == body_b {
+            return Err(AddJointError::SameBody(body_a));
+        }
+        for id in [body_a, body_b] {
+            if self.body(id).is_none() && self.static_body(id).is_none() {
+                return Err(AddJointError::BodyNotFound(id));
+            }
+        }
+        if self.body(body_a).is_none() && self.body(body_b).is_none() {
+            return Err(AddJointError::StaticPair(body_a, body_b));
+        }
+        Ok(())
+    }
+
+    fn wake_body(&mut self, id: BodyId) {
+        if let Ok(index) = self.bodies.binary_search_by_key(&id, Body::id) {
+            self.bodies[index].state_mut().wake();
+        }
+    }
+
+    fn wake_joint_bodies(&mut self, body_a: BodyId, body_b: BodyId) {
+        self.wake_body(body_a);
+        self.wake_body(body_b);
+    }
+
+    fn remove_joints_for_body(&mut self, id: BodyId) {
+        for index in 0..self.distance_joints.len() {
+            let joint = self.distance_joints[index];
+            if joint.body_a() == id || joint.body_b() == id {
+                self.wake_joint_bodies(joint.body_a(), joint.body_b());
+            }
+        }
+        for index in 0..self.rope_joints.len() {
+            let joint = self.rope_joints[index];
+            if joint.body_a() == id || joint.body_b() == id {
+                self.wake_joint_bodies(joint.body_a(), joint.body_b());
+            }
+        }
+        self.mouse_joints.retain(|joint| joint.body() != id);
+        self.distance_joints
+            .retain(|joint| joint.body_a() != id && joint.body_b() != id);
+        self.rope_joints
+            .retain(|joint| joint.body_a() != id && joint.body_b() != id);
+    }
+}
+
+#[inline(always)]
+fn canonical_pair(a: BodyId, b: BodyId) -> (BodyId, BodyId) {
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 impl Default for World {
@@ -171,7 +414,7 @@ mod tests {
     use crate::body::{BodyState, Material};
     use crate::collider::{Circle, CompositeCollider};
     use crate::quantity::{
-        Angle, AngularVelocity, Length, LinearAcceleration, LinearVelocity, Mass, Position,
+        Angle, AngularVelocity, Force, Length, LinearAcceleration, LinearVelocity, Mass, Position,
     };
     use crate::transform::Transform;
 
@@ -191,6 +434,42 @@ mod tests {
 
     fn world() -> World {
         World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    }
+
+    fn static_circle(id: u64, x: f64) -> StaticBody {
+        StaticBody::new(
+            BodyId::new(id),
+            Transform::new(Position::from_meters(x, 0.0).unwrap(), Angle::ZERO),
+            CompositeCollider::single(
+                Circle::new(Length::from_meters(0.1).unwrap())
+                    .unwrap()
+                    .into(),
+            )
+            .unwrap(),
+            Material::INELASTIC,
+        )
+    }
+
+    fn distance_joint(a: u64, b: u64) -> DistanceJoint {
+        DistanceJoint::new(
+            BodyId::new(a),
+            Position::ZERO,
+            BodyId::new(b),
+            Position::ZERO,
+            Length::from_meters(1.0).unwrap(),
+            Force::from_newtons(10.0).unwrap(),
+        )
+    }
+
+    fn rope_joint(a: u64, b: u64) -> RopeJoint {
+        RopeJoint::new(
+            BodyId::new(a),
+            Position::ZERO,
+            BodyId::new(b),
+            Position::ZERO,
+            Length::from_meters(1.0).unwrap(),
+            Force::from_newtons(10.0).unwrap(),
+        )
     }
 
     #[test]
@@ -241,5 +520,107 @@ mod tests {
             world.add_static_body(static_body),
             Err(AddBodyError::DuplicateId(BodyId::new(7)))
         );
+    }
+
+    #[test]
+    fn mouse_joint_requires_a_unique_dynamic_body() {
+        let mut world = world();
+        let joint = MouseJoint::new(
+            BodyId::new(7),
+            Position::ZERO,
+            Position::ZERO,
+            Force::from_newtons(10.0).unwrap(),
+        );
+
+        assert_eq!(
+            world.add_mouse_joint(joint),
+            Err(AddMouseJointError::BodyNotFound(BodyId::new(7)))
+        );
+        world.add_body(circle_body(7)).unwrap();
+        world.add_mouse_joint(joint).unwrap();
+        assert_eq!(
+            world.add_mouse_joint(joint),
+            Err(AddMouseJointError::DuplicateBody(BodyId::new(7)))
+        );
+        assert_eq!(world.mouse_joint(BodyId::new(7)), Some(&joint));
+
+        world.remove_body(BodyId::new(7)).unwrap();
+        assert!(world.mouse_joints().is_empty());
+    }
+
+    #[test]
+    fn two_body_joint_rejects_every_invalid_pair_kind() {
+        let mut world = world();
+        world.add_body(circle_body(1)).unwrap();
+        world.add_static_body(static_circle(2, 2.0)).unwrap();
+        world.add_static_body(static_circle(3, 3.0)).unwrap();
+
+        assert_eq!(
+            world.add_distance_joint(distance_joint(1, 1)),
+            Err(AddJointError::SameBody(BodyId::new(1)))
+        );
+        assert_eq!(
+            world.add_distance_joint(distance_joint(1, 9)),
+            Err(AddJointError::BodyNotFound(BodyId::new(9)))
+        );
+        assert_eq!(
+            world.add_rope_joint(rope_joint(2, 3)),
+            Err(AddJointError::StaticPair(BodyId::new(2), BodyId::new(3)))
+        );
+
+        world.add_distance_joint(distance_joint(2, 1)).unwrap();
+        assert_eq!(
+            world.add_distance_joint(distance_joint(1, 2)),
+            Err(AddJointError::DuplicatePair(BodyId::new(1), BodyId::new(2)))
+        );
+    }
+
+    #[test]
+    fn two_body_joint_collections_support_full_lookup_lifecycle() {
+        let mut world = world();
+        world.add_body(circle_body(1)).unwrap();
+        world.add_body(circle_body(3)).unwrap();
+        world.add_static_body(static_circle(2, 2.0)).unwrap();
+
+        world.add_distance_joint(distance_joint(3, 2)).unwrap();
+        world.add_distance_joint(distance_joint(2, 1)).unwrap();
+        world.add_rope_joint(rope_joint(3, 1)).unwrap();
+
+        assert_eq!(world.distance_joints()[0].body_a(), BodyId::new(1));
+        assert_eq!(world.distance_joints()[1].body_b(), BodyId::new(3));
+        world
+            .distance_joint_mut(BodyId::new(2), BodyId::new(1))
+            .unwrap()
+            .set_length(Length::from_meters(0.5).unwrap());
+        assert_eq!(
+            world
+                .distance_joint(BodyId::new(1), BodyId::new(2))
+                .unwrap()
+                .length(),
+            Length::from_meters(0.5).unwrap()
+        );
+        assert!(
+            world
+                .remove_rope_joint(BodyId::new(1), BodyId::new(3))
+                .is_some()
+        );
+        assert!(world.rope_joints().is_empty());
+
+        world.remove_static_body(BodyId::new(2)).unwrap();
+        assert!(world.distance_joints().is_empty());
+    }
+
+    #[test]
+    fn removing_either_dynamic_endpoint_cleans_both_joint_types() {
+        let mut world = world();
+        world.add_body(circle_body(1)).unwrap();
+        world.add_body(circle_body(2)).unwrap();
+        world.add_distance_joint(distance_joint(1, 2)).unwrap();
+        world.add_rope_joint(rope_joint(1, 2)).unwrap();
+
+        world.remove_body(BodyId::new(2)).unwrap();
+
+        assert!(world.distance_joints().is_empty());
+        assert!(world.rope_joints().is_empty());
     }
 }

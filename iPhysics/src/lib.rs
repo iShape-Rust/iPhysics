@@ -4,8 +4,9 @@ extern crate alloc;
 pub mod body;
 pub mod collider;
 pub mod collision;
-pub(crate) mod ops;
 pub mod geometry;
+pub mod joint;
+pub(crate) mod ops;
 pub mod quantity;
 pub mod transform;
 pub mod world;
@@ -16,9 +17,10 @@ pub use collider::{
 };
 pub use collision::Contact;
 pub use geometry::{Aabb, GeometryPoint, UnitVector};
+pub use joint::{DistanceJoint, MouseJoint, RopeJoint};
 pub use quantity::{
-    Angle, AngleDelta, AngularAcceleration, AngularVelocity, Length, LinearAcceleration,
-    LinearVelocity, Mass, Position,
+    Angle, AngleDelta, AngularAcceleration, AngularVelocity, Damping, Force, Length,
+    LinearAcceleration, LinearVelocity, Mass, Position,
 };
 pub use transform::Transform;
-pub use world::{AddBodyError, StepStats, World, WorldSettings};
+pub use world::{AddBodyError, AddJointError, AddMouseJointError, StepStats, World, WorldSettings};

@@ -2,12 +2,15 @@ mod camera;
 mod grid;
 
 use camera::Camera;
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+};
 use grid::Grid;
 use i_physics::{
     Aabb, Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Collider, ColliderPart,
-    CompositeCollider, Contact, Convex, Length, LinearAcceleration, LinearVelocity, Mass, Material,
-    Position, StaticBody, StepStats, Transform, World, WorldSettings,
+    CompositeCollider, Contact, Convex, DistanceJoint, Force, Length, LinearAcceleration,
+    LinearVelocity, Mass, Material, MouseJoint, Position, RopeJoint, StaticBody, StepStats,
+    Transform, World, WorldSettings,
 };
 use std::time::{Duration, Instant};
 
@@ -29,11 +32,17 @@ enum Scenario {
     CircleVsConvex,
     ConvexVsConvex,
     CompositePlayground,
+    DeepBoxPenetration,
+    DistanceDynamicPair,
+    DistanceStaticHarpoon,
+    RopeDynamicPair,
+    RopeStaticHarpoon,
+    RopeGravityHarpoon,
     ReplayRollback,
 }
 
 impl Scenario {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 20] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
@@ -47,6 +56,12 @@ impl Scenario {
         Self::CircleVsConvex,
         Self::ConvexVsConvex,
         Self::CompositePlayground,
+        Self::DeepBoxPenetration,
+        Self::DistanceDynamicPair,
+        Self::DistanceStaticHarpoon,
+        Self::RopeDynamicPair,
+        Self::RopeStaticHarpoon,
+        Self::RopeGravityHarpoon,
         Self::ReplayRollback,
     ];
 
@@ -65,6 +80,12 @@ impl Scenario {
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
+            Self::DeepBoxPenetration => "Deep penetration: nested boxes",
+            Self::DistanceDynamicPair => "DistanceJoint: two dynamic bodies",
+            Self::DistanceStaticHarpoon => "DistanceJoint: fixed harpoon",
+            Self::RopeDynamicPair => "RopeJoint: two dynamic bodies",
+            Self::RopeStaticHarpoon => "RopeJoint: harpoon pull",
+            Self::RopeGravityHarpoon => "RopeJoint: gravity harpoon",
             Self::ReplayRollback => "Replay / rollback comparison",
         }
     }
@@ -92,9 +113,46 @@ impl Scenario {
             Self::CompositePlayground => {
                 "Circles and convex bodies fall onto a multi-part static collider."
             }
+            Self::DeepBoxPenetration => {
+                "A small dynamic box starts fully embedded in a larger one. Pause, R, then N to inspect each correction tick."
+            }
+            Self::DistanceDynamicPair => {
+                "Off-center anchors keep a fixed separation while both boxes translate and rotate."
+            }
+            Self::DistanceStaticHarpoon => {
+                "A moving body stays tethered at a fixed distance from a static wall anchor."
+            }
+            Self::RopeDynamicPair => {
+                "The bodies separate freely while slack, then the maximum distance becomes taut."
+            }
+            Self::RopeStaticHarpoon => {
+                "A wall-mounted rope arrests and pulls the moving shooter when it becomes taut."
+            }
+            Self::RopeGravityHarpoon => {
+                "Gravity drops the shooter through a slack phase before the wall rope catches it."
+            }
             Self::ReplayRollback => {
                 "A cloned checkpoint advances independently and is compared every tick."
             }
+        }
+    }
+
+    const fn hint(self) -> Option<&'static str> {
+        match self {
+            Self::DistanceDynamicPair => {
+                Some("DISTANCE · drag either box; off-center anchors transmit rotation")
+            }
+            Self::DistanceStaticHarpoon => {
+                Some("DISTANCE HARPOON · drag the blue body or reel the tether")
+            }
+            Self::RopeDynamicPair => Some("ROPE · gray dashed = slack, orange solid = taut"),
+            Self::RopeStaticHarpoon => {
+                Some("ROPE HARPOON · reel in to pull the shooter toward the wall")
+            }
+            Self::RopeGravityHarpoon => {
+                Some("GRAVITY HARPOON · fall through slack, then swing from the wall")
+            }
+            _ => None,
         }
     }
 }
@@ -118,6 +176,7 @@ struct PhysicsDebugApp {
     speed: f32,
     accumulator: Duration,
     last_frame: Instant,
+    dragged_body: Option<BodyId>,
 }
 
 impl Default for PhysicsDebugApp {
@@ -136,6 +195,7 @@ impl Default for PhysicsDebugApp {
             speed: 1.0,
             accumulator: Duration::ZERO,
             last_frame: Instant::now(),
+            dragged_body: None,
         }
     }
 }
@@ -181,6 +241,10 @@ impl PhysicsDebugApp {
             self.reset();
         }
         ui.small(self.scenario.description());
+
+        if self.scenario.hint().is_some() {
+            self.joint_controls(ui);
+        }
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -252,7 +316,72 @@ impl PhysicsDebugApp {
             "contact + response normal on A",
         );
         legend(ui, Color32::from_rgb(106, 226, 125), "AABB");
-        ui.small("Mouse wheel: zoom · right/middle drag: pan");
+        if self.scenario.hint().is_some() {
+            legend(ui, Color32::from_rgb(255, 126, 182), "distance constraint");
+            legend(ui, Color32::from_rgb(255, 174, 66), "taut rope");
+            legend(ui, Color32::from_rgb(135, 143, 158), "slack rope");
+        }
+        ui.small("Left drag: move body · wheel: zoom · right/middle drag: pan");
+    }
+
+    fn joint_controls(&mut self, ui: &mut egui::Ui) {
+        let distance = self.world.distance_joints().first().copied();
+        let rope = self.world.rope_joints().first().copied();
+        let Some((body_a, body_b, current, is_rope)) = distance
+            .map(|joint| (joint.body_a(), joint.body_b(), joint.length(), false))
+            .or_else(|| {
+                rope.map(|joint| (joint.body_a(), joint.body_b(), joint.max_length(), true))
+            })
+        else {
+            return;
+        };
+
+        ui.add_space(6.0);
+        ui.separator();
+        ui.label(if is_rope {
+            "Rope max length"
+        } else {
+            "Distance target length"
+        });
+
+        let mut requested = current.to_meters();
+        let mut changed = ui
+            .add(
+                egui::Slider::new(&mut requested, 1.0..=8.0)
+                    .text("metres")
+                    .fixed_decimals(2),
+            )
+            .changed();
+        ui.horizontal(|ui| {
+            if ui.button("Reel in −0.25").clicked() {
+                requested = (requested - 0.25).max(1.0);
+                changed = true;
+            }
+            if ui.button("Pay out +0.25").clicked() {
+                requested = (requested + 0.25).min(8.0);
+                changed = true;
+            }
+        });
+        ui.small("Length changes are quantized before the next fixed simulation tick.");
+
+        if !changed {
+            return;
+        }
+        let length = Length::from_meters(requested).expect("joint control range must fit Length");
+        if length == current {
+            return;
+        }
+        if is_rope {
+            self.world
+                .rope_joint_mut(body_a, body_b)
+                .expect("displayed rope joint must still exist")
+                .set_max_length(length);
+        } else {
+            self.world
+                .distance_joint_mut(body_a, body_b)
+                .expect("displayed distance joint must still exist")
+                .set_length(length);
+        }
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
@@ -260,6 +389,7 @@ impl PhysicsDebugApp {
         let rect = response.rect;
         self.grid
             .handle_input(ui, &response, rect, &mut self.camera);
+        self.handle_mouse_drag(ui, &response, rect);
         self.grid.paint(&painter, rect, &self.camera);
 
         for body in self.world.bodies() {
@@ -320,6 +450,21 @@ impl PhysicsDebugApp {
             paint_aabb(&painter, rect, &self.camera, body.aabb());
         }
 
+        for joint in self.world.mouse_joints() {
+            let Some(body) = self.world.body(joint.body()) else {
+                continue;
+            };
+            let [anchor_x, anchor_y] = joint.world_anchor(body.state().transform()).raw();
+            let anchor = screen_raw_position(&self.camera, rect, anchor_x, anchor_y);
+            let target = screen_position(&self.camera, rect, joint.target());
+            let color = Color32::from_rgb(255, 126, 182);
+            painter.line_segment([anchor, target], Stroke::new(2.0_f32, color));
+            painter.circle_filled(anchor, 4.0, color);
+            painter.circle_stroke(target, 6.0, Stroke::new(2.0_f32, color));
+        }
+
+        self.paint_two_body_joints(&painter, rect);
+
         for contact in self.world.contacts() {
             let [x, y] = contact.point.to_meters();
             let point = Pos2::new(x as f32, y as f32);
@@ -365,6 +510,80 @@ impl PhysicsDebugApp {
                 color,
             );
         }
+
+        if let Some(hint) = self.scenario.hint() {
+            painter.text(
+                rect.left_top() + Vec2::new(12.0, 12.0),
+                Align2::LEFT_TOP,
+                hint,
+                FontId::monospace(13.0),
+                Color32::from_rgb(220, 226, 236),
+            );
+        }
+    }
+
+    fn paint_two_body_joints(&self, painter: &egui::Painter, rect: Rect) {
+        for joint in self.world.distance_joints() {
+            let Some((anchor_a, anchor_b, current)) = joint_screen_anchors(
+                &self.world,
+                &self.camera,
+                rect,
+                joint.body_a(),
+                joint.body_b(),
+                |transform| joint.world_anchor_a(transform).raw(),
+                |transform| joint.world_anchor_b(transform).raw(),
+            ) else {
+                continue;
+            };
+            let color = Color32::from_rgb(255, 126, 182);
+            painter.line_segment([anchor_a, anchor_b], Stroke::new(3.0_f32, color));
+            paint_joint_anchors(painter, anchor_a, anchor_b, color);
+            painter.text(
+                anchor_a.lerp(anchor_b, 0.5) + Vec2::new(0.0, -8.0),
+                Align2::CENTER_BOTTOM,
+                format!("{current:.2} / {:.2} m", joint.length().to_meters()),
+                FontId::monospace(12.0),
+                color,
+            );
+        }
+
+        for joint in self.world.rope_joints() {
+            let Some((anchor_a, anchor_b, current)) = joint_screen_anchors(
+                &self.world,
+                &self.camera,
+                rect,
+                joint.body_a(),
+                joint.body_b(),
+                |transform| joint.world_anchor_a(transform).raw(),
+                |transform| joint.world_anchor_b(transform).raw(),
+            ) else {
+                continue;
+            };
+            let max_length = joint.max_length().to_meters();
+            let taut = rope_is_visually_taut(current, max_length);
+            let color = if taut {
+                Color32::from_rgb(255, 174, 66)
+            } else {
+                Color32::from_rgb(135, 143, 158)
+            };
+            let stroke = Stroke::new(if taut { 3.0_f32 } else { 2.0_f32 }, color);
+            if taut {
+                painter.line_segment([anchor_a, anchor_b], stroke);
+            } else {
+                paint_dashed_line(painter, anchor_a, anchor_b, stroke);
+            }
+            paint_joint_anchors(painter, anchor_a, anchor_b, color);
+            painter.text(
+                anchor_a.lerp(anchor_b, 0.5) + Vec2::new(0.0, -8.0),
+                Align2::CENTER_BOTTOM,
+                format!(
+                    "{} · {current:.2} / {max_length:.2} m",
+                    if taut { "TAUT" } else { "slack" }
+                ),
+                FontId::monospace(12.0),
+                color,
+            );
+        }
     }
 
     fn handle_shortcuts(&mut self, ui: &egui::Ui) {
@@ -383,6 +602,64 @@ impl PhysicsDebugApp {
         }
         if reset {
             self.reset();
+        }
+    }
+
+    fn handle_mouse_drag(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
+        if response.drag_started_by(PointerButton::Primary)
+            && let Some(pointer) = ui.input(|input| input.pointer.press_origin())
+            && let Some(target) = pointer_position(&self.camera, rect, pointer)
+            && let Some(body_id) = body_at_point(&self.world, target)
+        {
+            let transform = self.world.body(body_id).unwrap().state().transform();
+            let max_force = Force::from_newtons(100.0).unwrap();
+            self.world
+                .add_mouse_joint(MouseJoint::at_world_point(
+                    body_id, transform, target, max_force,
+                ))
+                .expect("selected body cannot already have a mouse joint");
+            if let Some(replay) = &mut self.replay {
+                let transform = replay.world.body(body_id).unwrap().state().transform();
+                replay
+                    .world
+                    .add_mouse_joint(MouseJoint::at_world_point(
+                        body_id, transform, target, max_force,
+                    ))
+                    .expect("replay body cannot already have a mouse joint");
+            }
+            self.dragged_body = Some(body_id);
+        }
+
+        if let Some(body_id) = self.dragged_body
+            && ui.input(|input| input.pointer.button_down(PointerButton::Primary))
+            && let Some(pointer) = response.interact_pointer_pos()
+            && let Some(target) = pointer_position(&self.camera, rect, pointer)
+        {
+            self.world
+                .mouse_joint_mut(body_id)
+                .expect("dragged body must retain its mouse joint")
+                .set_target(target);
+            if let Some(replay) = &mut self.replay {
+                replay
+                    .world
+                    .mouse_joint_mut(body_id)
+                    .expect("replay body must retain its mouse joint")
+                    .set_target(target);
+            }
+        }
+
+        if response.drag_stopped_by(PointerButton::Primary) {
+            self.stop_mouse_drag();
+        }
+    }
+
+    fn stop_mouse_drag(&mut self) {
+        let Some(body_id) = self.dragged_body.take() else {
+            return;
+        };
+        self.world.remove_mouse_joint(body_id);
+        if let Some(replay) = &mut self.replay {
+            replay.world.remove_mouse_joint(body_id);
         }
     }
 
@@ -440,6 +717,54 @@ impl PhysicsDebugApp {
         self.accumulator = Duration::ZERO;
         self.last_frame = Instant::now();
         self.camera = Camera::default();
+        self.dragged_body = None;
+    }
+}
+
+fn pointer_position(camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Position> {
+    let world = camera.world_from_screen(rect, pointer);
+    Position::from_meters(world.x as f64, world.y as f64)
+}
+
+fn body_at_point(world: &World, point: Position) -> Option<BodyId> {
+    world
+        .bodies()
+        .iter()
+        .rev()
+        .find(|body| collider_contains(body.collider(), body.state().transform(), point))
+        .map(Body::id)
+}
+
+fn collider_contains(collider: Collider, transform: Transform, point: Position) -> bool {
+    let point = point.raw_point();
+    match collider {
+        Collider::Circle(circle) => {
+            let center = transform.position.raw_point();
+            let dx = point.x as i64 - center.x as i64;
+            let dy = point.y as i64 - center.y as i64;
+            let radius = (circle.radius().to_meters() * Position::SCALE as f64) as i64;
+            dx * dx + dy * dy <= radius * radius
+        }
+        Collider::Convex(convex) => {
+            let vertices = convex.transformed_vertices(transform);
+            let mut has_positive = false;
+            let mut has_negative = false;
+            for index in 0..vertices.len() {
+                let a = vertices[index].raw();
+                let b = vertices[(index + 1) % vertices.len()].raw();
+                let edge_x = b[0] as i64 - a[0] as i64;
+                let edge_y = b[1] as i64 - a[1] as i64;
+                let point_x = point.x as i64 - a[0] as i64;
+                let point_y = point.y as i64 - a[1] as i64;
+                let cross = edge_x * point_y - edge_y * point_x;
+                has_positive |= cross > 0;
+                has_negative |= cross < 0;
+                if has_positive && has_negative {
+                    return false;
+                }
+            }
+            true
+        }
     }
 }
 
@@ -527,6 +852,63 @@ fn paint_body_id(
 fn screen_position(camera: &Camera, rect: Rect, position: Position) -> Pos2 {
     let [x, y] = position.to_meters();
     camera.screen_from_world(rect, Pos2::new(x as f32, y as f32))
+}
+
+fn joint_screen_anchors(
+    world: &World,
+    camera: &Camera,
+    rect: Rect,
+    body_a: BodyId,
+    body_b: BodyId,
+    anchor_a: impl FnOnce(Transform) -> [i32; 2],
+    anchor_b: impl FnOnce(Transform) -> [i32; 2],
+) -> Option<(Pos2, Pos2, f64)> {
+    let transform_a = endpoint_transform(world, body_a)?;
+    let transform_b = endpoint_transform(world, body_b)?;
+    let [a_x, a_y] = anchor_a(transform_a);
+    let [b_x, b_y] = anchor_b(transform_b);
+    let dx = (b_x as i64 - a_x as i64) as f64 / Position::SCALE as f64;
+    let dy = (b_y as i64 - a_y as i64) as f64 / Position::SCALE as f64;
+    Some((
+        screen_raw_position(camera, rect, a_x, a_y),
+        screen_raw_position(camera, rect, b_x, b_y),
+        dx.hypot(dy),
+    ))
+}
+
+fn endpoint_transform(world: &World, id: BodyId) -> Option<Transform> {
+    world
+        .body(id)
+        .map(|body| body.state().transform())
+        .or_else(|| world.static_body(id).map(StaticBody::transform))
+}
+
+fn paint_joint_anchors(painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32) {
+    painter.circle_filled(a, 4.5, color);
+    painter.circle_filled(b, 4.5, color);
+    painter.circle_stroke(a, 7.0, Stroke::new(1.0_f32, color));
+    painter.circle_stroke(b, 7.0, Stroke::new(1.0_f32, color));
+}
+
+fn paint_dashed_line(painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke) {
+    let delta = b - a;
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let direction = delta / length;
+    let dash = 9.0;
+    let gap = 6.0;
+    let mut start = 0.0;
+    while start < length {
+        let end = (start + dash).min(length);
+        painter.line_segment([a + direction * start, a + direction * end], stroke);
+        start += dash + gap;
+    }
+}
+
+fn rope_is_visually_taut(current: f64, max_length: f64) -> bool {
+    current >= max_length * 0.98
 }
 
 /// Contact normals are stored A -> B. The displayed arrow is the solver
@@ -791,6 +1173,12 @@ fn build_world(scenario: Scenario) -> World {
             );
             world
         }
+        Scenario::DeepBoxPenetration => deep_box_penetration_world(),
+        Scenario::DistanceDynamicPair => distance_dynamic_pair_world(),
+        Scenario::DistanceStaticHarpoon => distance_static_harpoon_world(),
+        Scenario::RopeDynamicPair => rope_dynamic_pair_world(),
+        Scenario::RopeStaticHarpoon => rope_static_harpoon_world(),
+        Scenario::RopeGravityHarpoon => rope_gravity_harpoon_world(),
         Scenario::ReplayRollback => {
             let mut world = zero_gravity_world();
             add(
@@ -808,6 +1196,215 @@ fn build_world(scenario: Scenario) -> World {
             world
         }
     }
+}
+
+fn deep_box_penetration_world() -> World {
+    let mut world = zero_gravity_world();
+    let material = Material::new(0.0, 0.4).unwrap();
+    add(
+        &mut world,
+        dynamic_convex(
+            1,
+            0.0,
+            1.0,
+            Angle::ZERO,
+            rectangle(2.4, 1.8),
+            0.0,
+            0.0,
+            material,
+        ),
+    );
+    add(
+        &mut world,
+        dynamic_convex(
+            2,
+            0.35,
+            1.15,
+            angle_degrees(12.0),
+            rectangle(0.75, 0.55),
+            0.0,
+            0.0,
+            material,
+        ),
+    );
+    world
+}
+
+fn distance_dynamic_pair_world() -> World {
+    let mut world = zero_gravity_world();
+    let material = Material::new(0.15, 0.2).unwrap();
+    add(
+        &mut world,
+        dynamic_convex(
+            1,
+            -2.5,
+            1.0,
+            angle_degrees(-12.0),
+            rectangle(0.8, 0.5),
+            0.0,
+            -1.7,
+            material,
+        ),
+    );
+    add(
+        &mut world,
+        dynamic_convex(
+            2,
+            2.5,
+            1.0,
+            angle_degrees(15.0),
+            rectangle(0.8, 0.5),
+            0.0,
+            1.7,
+            material,
+        ),
+    );
+
+    let anchor_a = Position::from_meters(-1.8, 1.55).unwrap();
+    let anchor_b = Position::from_meters(1.8, 0.45).unwrap();
+    let joint = DistanceJoint::between_world_points(
+        BodyId::new(1),
+        world.body(BodyId::new(1)).unwrap().state().transform(),
+        anchor_a,
+        BodyId::new(2),
+        world.body(BodyId::new(2)).unwrap().state().transform(),
+        anchor_b,
+        joint_force(),
+    )
+    .expect("distance joint anchors must fit Length");
+    world
+        .add_distance_joint(joint)
+        .expect("distance scenario endpoints must exist");
+    world
+}
+
+fn distance_static_harpoon_world() -> World {
+    let mut world = zero_gravity_world();
+    add_static(&mut world, harpoon_wall(1));
+    add(
+        &mut world,
+        dynamic_convex(
+            2,
+            -0.4,
+            1.2,
+            angle_degrees(-18.0),
+            rectangle(0.9, 0.45),
+            0.2,
+            -2.4,
+            Material::new(0.1, 0.4).unwrap(),
+        ),
+    );
+
+    let wall_anchor = Position::from_meters(4.25, 2.6).unwrap();
+    let body_anchor = Position::from_meters(0.25, 1.5).unwrap();
+    let joint = DistanceJoint::between_world_points(
+        BodyId::new(1),
+        world.static_body(BodyId::new(1)).unwrap().transform(),
+        wall_anchor,
+        BodyId::new(2),
+        world.body(BodyId::new(2)).unwrap().state().transform(),
+        body_anchor,
+        joint_force(),
+    )
+    .expect("distance harpoon anchors must fit Length");
+    world
+        .add_distance_joint(joint)
+        .expect("distance harpoon endpoints must exist");
+    world
+}
+
+fn rope_dynamic_pair_world() -> World {
+    let mut world = zero_gravity_world();
+    let material = Material::new(0.0, 0.1).unwrap();
+    add(
+        &mut world,
+        dynamic(1, -1.5, 1.0, 0.65, -2.0, 0.35, material),
+    );
+    add(&mut world, dynamic(2, 1.5, 1.0, 0.65, 2.0, -0.35, material));
+    let joint = RopeJoint::at_world_points(
+        BodyId::new(1),
+        world.body(BodyId::new(1)).unwrap().state().transform(),
+        Position::from_meters(-1.5, 1.0).unwrap(),
+        BodyId::new(2),
+        world.body(BodyId::new(2)).unwrap().state().transform(),
+        Position::from_meters(1.5, 1.0).unwrap(),
+        Length::from_meters(4.5).unwrap(),
+        joint_force(),
+    );
+    world
+        .add_rope_joint(joint)
+        .expect("rope scenario endpoints must exist");
+    world
+}
+
+fn rope_static_harpoon_world() -> World {
+    let mut world = zero_gravity_world();
+    add_static(&mut world, harpoon_wall(1));
+    add(
+        &mut world,
+        dynamic_convex(
+            2,
+            -0.2,
+            0.5,
+            angle_degrees(8.0),
+            rectangle(0.9, 0.55),
+            -2.4,
+            -0.7,
+            Material::new(0.0, 0.5).unwrap(),
+        ),
+    );
+
+    let joint = RopeJoint::at_world_points(
+        BodyId::new(1),
+        world.static_body(BodyId::new(1)).unwrap().transform(),
+        Position::from_meters(4.25, 2.2).unwrap(),
+        BodyId::new(2),
+        world.body(BodyId::new(2)).unwrap().state().transform(),
+        Position::from_meters(0.55, 0.8).unwrap(),
+        Length::from_meters(4.6).unwrap(),
+        joint_force(),
+    );
+    world
+        .add_rope_joint(joint)
+        .expect("rope harpoon endpoints must exist");
+    world
+}
+
+fn rope_gravity_harpoon_world() -> World {
+    let mut world = World::default();
+    add_static(&mut world, harpoon_wall(1));
+    add(
+        &mut world,
+        dynamic_convex(
+            2,
+            0.5,
+            3.4,
+            angle_degrees(-8.0),
+            rectangle(0.9, 0.55),
+            -0.5,
+            0.0,
+            Material::new(0.0, 0.5).unwrap(),
+        ),
+    );
+
+    let joint = RopeJoint::at_world_points(
+        BodyId::new(1),
+        world.static_body(BodyId::new(1)).unwrap().transform(),
+        Position::from_meters(4.25, 4.2).unwrap(),
+        BodyId::new(2),
+        world.body(BodyId::new(2)).unwrap().state().transform(),
+        Position::from_meters(1.2, 3.7).unwrap(),
+        Length::from_meters(4.2).unwrap(),
+        joint_force(),
+    );
+    world
+        .add_rope_joint(joint)
+        .expect("gravity harpoon endpoints must exist");
+    world
+}
+
+fn joint_force() -> Force {
+    Force::from_newtons(240.0).unwrap()
 }
 
 fn zero_gravity_world() -> World {
@@ -967,6 +1564,16 @@ fn inclined_floor(id: u64, degrees: f64, material: Material) -> StaticBody {
     )
 }
 
+fn harpoon_wall(id: u64) -> StaticBody {
+    StaticBody::new(
+        BodyId::new(id),
+        Transform::new(Position::from_meters(4.55, 1.0).unwrap(), Angle::ZERO),
+        CompositeCollider::single(rectangle(0.3, 4.5).into())
+            .expect("harpoon wall collider must fit"),
+        Material::INELASTIC,
+    )
+}
+
 fn parallel_tracks(id: u64) -> StaticBody {
     let parts = [2.5, -0.5, -3.5]
         .into_iter()
@@ -1086,6 +1693,164 @@ mod tests {
     }
 
     #[test]
+    fn nested_boxes_generate_and_resolve_a_deep_contact() {
+        let mut world = build_world(Scenario::DeepBoxPenetration);
+        let before = body_center_distance(&world, BodyId::new(1), BodyId::new(2));
+
+        let first_step = world.step();
+        assert!(first_step.contacts > 0);
+        for _ in 0..15 {
+            world.step();
+        }
+
+        let after = body_center_distance(&world, BodyId::new(1), BodyId::new(2));
+        assert!(
+            after > before + 0.5,
+            "nested boxes did not separate: {before:.3} m -> {after:.3} m"
+        );
+    }
+
+    fn body_center_distance(world: &World, body_a: BodyId, body_b: BodyId) -> f64 {
+        let [a_x, a_y] = world
+            .body(body_a)
+            .unwrap()
+            .state()
+            .transform()
+            .position
+            .to_meters();
+        let [b_x, b_y] = world
+            .body(body_b)
+            .unwrap()
+            .state()
+            .transform()
+            .position
+            .to_meters();
+        (b_x - a_x).hypot(b_y - a_y)
+    }
+
+    #[test]
+    fn joint_scenarios_build_with_the_expected_endpoints() {
+        for (scenario, distance_count, rope_count, static_count) in [
+            (Scenario::DistanceDynamicPair, 1, 0, 0),
+            (Scenario::DistanceStaticHarpoon, 1, 0, 1),
+            (Scenario::RopeDynamicPair, 0, 1, 0),
+            (Scenario::RopeStaticHarpoon, 0, 1, 1),
+            (Scenario::RopeGravityHarpoon, 0, 1, 1),
+        ] {
+            let world = build_world(scenario);
+            assert_eq!(world.distance_joints().len(), distance_count);
+            assert_eq!(world.rope_joints().len(), rope_count);
+            assert_eq!(world.static_body_count(), static_count);
+            for joint in world.distance_joints() {
+                assert!(endpoint_transform(&world, joint.body_a()).is_some());
+                assert!(endpoint_transform(&world, joint.body_b()).is_some());
+            }
+            for joint in world.rope_joints() {
+                assert!(endpoint_transform(&world, joint.body_a()).is_some());
+                assert!(endpoint_transform(&world, joint.body_b()).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_rope_scene_transitions_from_slack_to_taut() {
+        let mut world = build_world(Scenario::RopeDynamicPair);
+        let initial = rope_distance(&world);
+        let max_length = world.rope_joints()[0].max_length().to_meters();
+        assert!(initial < max_length - 1.0);
+
+        let mut maximum_seen = initial;
+        for _ in 0..64 {
+            world.step();
+            maximum_seen = maximum_seen.max(rope_distance(&world));
+        }
+
+        assert!(
+            maximum_seen >= max_length,
+            "rope never reached its {max_length:.4} m limit; max was {maximum_seen:.4} m"
+        );
+        assert!(rope_distance(&world) <= max_length + 0.001);
+    }
+
+    #[test]
+    fn gravity_harpoon_falls_from_slack_to_the_rope_limit() {
+        let mut world = build_world(Scenario::RopeGravityHarpoon);
+        let initial_y = world
+            .body(BodyId::new(2))
+            .unwrap()
+            .state()
+            .transform()
+            .position;
+        let initial_distance = rope_distance(&world);
+        let max_length = world.rope_joints()[0].max_length().to_meters();
+        assert!(initial_distance < max_length - 1.0);
+
+        let mut maximum_seen = initial_distance;
+        for _ in 0..128 {
+            world.step();
+            maximum_seen = maximum_seen.max(rope_distance(&world));
+        }
+
+        let final_y = world
+            .body(BodyId::new(2))
+            .unwrap()
+            .state()
+            .transform()
+            .position;
+        assert!(final_y.to_meters()[1] < initial_y.to_meters()[1] - 1.0);
+        assert!(
+            maximum_seen >= max_length,
+            "gravity rope never reached its {max_length:.4} m limit; max was {maximum_seen:.4} m"
+        );
+    }
+
+    #[test]
+    fn resetting_each_joint_scene_recreates_a_clean_world() {
+        let mut app = PhysicsDebugApp::default();
+        for scenario in [
+            Scenario::DistanceDynamicPair,
+            Scenario::DistanceStaticHarpoon,
+            Scenario::RopeDynamicPair,
+            Scenario::RopeStaticHarpoon,
+            Scenario::RopeGravityHarpoon,
+        ] {
+            app.scenario = scenario;
+            app.reset();
+            let dynamic_id = app.world.bodies()[0].id();
+            app.world
+                .add_mouse_joint(MouseJoint::new(
+                    dynamic_id,
+                    Position::ZERO,
+                    Position::ZERO,
+                    Force::from_newtons(10.0).unwrap(),
+                ))
+                .unwrap();
+
+            app.reset();
+
+            assert!(app.world.mouse_joints().is_empty());
+            assert_eq!(
+                app.world.distance_joints().len() + app.world.rope_joints().len(),
+                1
+            );
+            for _ in 0..8 {
+                app.step_once();
+            }
+        }
+    }
+
+    fn rope_distance(world: &World) -> f64 {
+        let joint = world.rope_joints()[0];
+        let [a_x, a_y] = joint
+            .world_anchor_a(endpoint_transform(world, joint.body_a()).unwrap())
+            .to_meters();
+        let [b_x, b_y] = joint
+            .world_anchor_b(endpoint_transform(world, joint.body_b()).unwrap())
+            .to_meters();
+        (b_x - a_x).hypot(b_y - a_y)
+    }
+
+    #[test]
     fn diagnostic_scenes_generate_contacts() {
         for scenario in [
             Scenario::FrictionComparison,
@@ -1097,6 +1862,7 @@ mod tests {
             Scenario::CircleVsConvex,
             Scenario::ConvexVsConvex,
             Scenario::CompositePlayground,
+            Scenario::DeepBoxPenetration,
         ] {
             let mut world = build_world(scenario);
             let mut contact_seen = false;
@@ -1159,6 +1925,39 @@ mod tests {
 
         assert_eq!(contact.normal.raw(), [1 << 30, 0]);
         assert_eq!(response_normal_on_body_a(&contact), Vec2::new(-1.0, 0.0));
+    }
+
+    #[test]
+    fn pointer_hit_test_handles_circles_and_rotated_convexes() {
+        let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
+        let circle_transform =
+            Transform::new(Position::from_meters(2.0, 3.0).unwrap(), Angle::ZERO);
+        assert!(collider_contains(
+            circle.into(),
+            circle_transform,
+            Position::from_meters(2.5, 3.0).unwrap(),
+        ));
+        assert!(!collider_contains(
+            circle.into(),
+            circle_transform,
+            Position::from_meters(3.1, 3.0).unwrap(),
+        ));
+
+        let box_collider = rectangle(1.0, 0.5);
+        let box_transform = Transform::new(
+            Position::from_meters(-2.0, 1.0).unwrap(),
+            Angle::QUARTER_TURN,
+        );
+        assert!(collider_contains(
+            box_collider.into(),
+            box_transform,
+            Position::from_meters(-2.4, 1.0).unwrap(),
+        ));
+        assert!(!collider_contains(
+            box_collider.into(),
+            box_transform,
+            Position::from_meters(-2.6, 1.0).unwrap(),
+        ));
     }
 
     #[test]

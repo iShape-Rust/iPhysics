@@ -77,9 +77,11 @@ impl AngularVelocity {
     /// Converts `omega * (r x n)` into the Q10 linear speed of a point along
     /// an arbitrary direction. The lever projection is expressed in Q16.
     #[inline(always)]
-    pub(crate) fn projected_point_speed_raw(self, lever_cross_direction_q16: i64) -> i64 {
+    pub(crate) fn projected_point_speed_raw(self, lever_cross_direction_q16: i32) -> i32 {
         const SHIFT: u32 = ANGULAR_KINEMATIC_FRACTION_BITS + POSITION_FRACTION_BITS
             - LINEAR_VELOCITY_FRACTION_BITS;
-        (self.0 as i64 * lever_cross_direction_q16).round_shift(SHIFT)
+        let result = (self.0 as i64 * lever_cross_direction_q16 as i64).round_shift(SHIFT);
+        debug_assert!(i32::try_from(result).is_ok());
+        result as i32
     }
 }

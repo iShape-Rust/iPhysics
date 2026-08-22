@@ -143,15 +143,29 @@ fn angular_velocity_conversion_is_symmetric() {
 #[test]
 fn angular_velocity_projects_lever_into_linear_speed_scale() {
     let velocity = AngularVelocity::from_radians_per_second(2.0).unwrap();
-    let half_meter_q16 = Position::SCALE / 2;
+    let half_meter_q16 = (Position::SCALE / 2) as i32;
 
     assert_eq!(
         velocity.projected_point_speed_raw(half_meter_q16),
-        LinearVelocity::SCALE
+        LinearVelocity::SCALE as i32
     );
     assert_eq!(
         velocity.projected_point_speed_raw(-half_meter_q16),
-        -LinearVelocity::SCALE
+        -(LinearVelocity::SCALE as i32)
+    );
+}
+
+#[test]
+fn angular_point_speed_extremes_stay_in_i32() {
+    let max_lever_q16 = 1 << 30;
+
+    assert_eq!(
+        AngularVelocity::from_raw(i32::MAX).projected_point_speed_raw(max_lever_q16),
+        i32::MAX
+    );
+    assert_eq!(
+        AngularVelocity::from_raw(i32::MIN).projected_point_speed_raw(max_lever_q16),
+        i32::MIN
     );
 }
 
