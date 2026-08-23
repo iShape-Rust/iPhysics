@@ -1,5 +1,4 @@
 use crate::body::Body;
-use crate::collision::Contact;
 use crate::quantity::{AngularVelocity, LinearVelocity, Position};
 use crate::{GeometryPoint, UnitVector};
 
@@ -32,8 +31,13 @@ pub(super) fn scalar_inverse_mass_q24(
         .saturating_add(rotational_inverse_mass_q24(lever_b_q16, inverse_inertia_b))
 }
 
-pub(super) fn relative_normal_speed(a: &Body, b: Option<&Body>, contact: &Contact) -> i32 {
-    relative_speed_along(a, b, contact.point, contact.normal)
+pub(super) fn relative_normal_speed(
+    a: &Body,
+    b: Option<&Body>,
+    point: GeometryPoint,
+    normal: UnitVector,
+) -> i32 {
+    relative_speed_along(a, b, point, normal)
 }
 
 pub(super) fn relative_speed_along(

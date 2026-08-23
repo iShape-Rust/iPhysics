@@ -1,14 +1,13 @@
 use super::StepStats;
 use super::constraint::{relative_normal_speed, two_bodies_mut};
 use crate::collision::collide;
-use crate::world::{ContactBodyIndex, ContactPair, World};
+use crate::world::{ActiveContact, ContactBodyIndex, World};
 
 const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 
 pub(super) fn build_contacts(world: &mut World) -> StepStats {
-    world.contacts.clear();
-    world.contact_pairs.clear();
+    world.active_contacts.clear();
     let mut stats = StepStats::default();
 
     for index_a in 0..world.bodies.len() {
@@ -37,10 +36,12 @@ pub(super) fn build_contacts(world: &mut World) -> StepStats {
                 b.state().transform(),
             ) {
                 for (point_index, contact) in manifold.into_contacts().enumerate() {
-                    world.contacts.push(contact);
-                    world.contact_pairs.push(ContactPair {
-                        a: index_a,
-                        b: ContactBodyIndex::Dynamic(index_b),
+                    world.active_contacts.push(ActiveContact {
+                        body_a: index_a,
+                        body_b: ContactBodyIndex::Dynamic(index_b),
+                        point: contact.point,
+                        normal: contact.normal,
+                        penetration: contact.penetration,
                         correct_position: point_index == 0,
                     });
                 }
@@ -74,10 +75,12 @@ pub(super) fn build_contacts(world: &mut World) -> StepStats {
                     part_transform,
                 ) {
                     for (point_index, contact) in manifold.into_contacts().enumerate() {
-                        world.contacts.push(contact);
-                        world.contact_pairs.push(ContactPair {
-                            a: index_a,
-                            b: ContactBodyIndex::Static(static_index),
+                        world.active_contacts.push(ActiveContact {
+                            body_a: index_a,
+                            body_b: ContactBodyIndex::Static(static_index),
+                            point: contact.point,
+                            normal: contact.normal,
+                            penetration: contact.penetration,
                             correct_position: point_index == 0,
                         });
                     }
@@ -86,23 +89,48 @@ pub(super) fn build_contacts(world: &mut World) -> StepStats {
         }
     }
 
-    stats.contacts = world.contacts.len();
+    sort_top_down(world);
+    stats.contacts = world.active_contacts.len();
     stats
 }
 
+fn sort_top_down(world: &mut World) {
+    world.active_contacts.sort_unstable_by(|a, b| {
+        let [ax, ay] = a.point.raw();
+        let [bx, by] = b.point.raw();
+        by.cmp(&ay)
+            .then_with(|| ax.cmp(&bx))
+            .then_with(|| a.body_a.cmp(&b.body_a))
+            .then_with(|| contact_body_key(a.body_b).cmp(&contact_body_key(b.body_b)))
+            .then_with(|| a.normal.raw().cmp(&b.normal.raw()))
+            .then_with(|| a.penetration.raw().cmp(&b.penetration.raw()))
+            .then_with(|| b.correct_position.cmp(&a.correct_position))
+    });
+}
+
+#[inline(always)]
+fn contact_body_key(body: ContactBodyIndex) -> (u8, usize) {
+    match body {
+        ContactBodyIndex::Dynamic(index) => (0, index),
+        ContactBodyIndex::Static(index) => (1, index),
+    }
+}
+
 pub(super) fn wake_impacted_bodies(world: &mut World) {
-    for (contact, pair) in world
-        .contacts
-        .iter()
-        .zip(world.contact_pairs.iter().copied())
-    {
-        let normal_speed = match pair.b {
-            ContactBodyIndex::Dynamic(index_b) => {
-                relative_normal_speed(&world.bodies[pair.a], Some(&world.bodies[index_b]), contact)
-            }
-            ContactBodyIndex::Static(_) => {
-                relative_normal_speed(&world.bodies[pair.a], None, contact)
-            }
+    for contact in world.active_contacts.iter().copied() {
+        let normal_speed = match contact.body_b {
+            ContactBodyIndex::Dynamic(index_b) => relative_normal_speed(
+                &world.bodies[contact.body_a],
+                Some(&world.bodies[index_b]),
+                contact.point,
+                contact.normal,
+            ),
+            ContactBodyIndex::Static(_) => relative_normal_speed(
+                &world.bodies[contact.body_a],
+                None,
+                contact.point,
+                contact.normal,
+            ),
         };
         let strong =
             normal_speed < -WAKE_SPEED_RAW || contact.penetration.raw() > WAKE_PENETRATION_RAW;
@@ -110,14 +138,14 @@ pub(super) fn wake_impacted_bodies(world: &mut World) {
             continue;
         }
 
-        match pair.b {
+        match contact.body_b {
             ContactBodyIndex::Dynamic(index_b) => {
-                let (a, b) = two_bodies_mut(&mut world.bodies, pair.a, index_b);
+                let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
                 a.state_mut().wake();
                 b.state_mut().wake();
             }
             ContactBodyIndex::Static(_) => {
-                world.bodies[pair.a].state_mut().wake();
+                world.bodies[contact.body_a].state_mut().wake();
             }
         }
     }
@@ -126,6 +154,7 @@ pub(super) fn wake_impacted_bodies(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::UnitVector;
     use crate::body::{Body, BodyId, BodyState, Material, StaticBody};
     use crate::collider::{Circle, ColliderPart, CompositeCollider};
     use crate::quantity::{
@@ -151,6 +180,36 @@ mod tests {
 
     fn zero_gravity_world() -> World {
         World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    }
+
+    #[test]
+    fn active_contacts_are_sorted_top_down_with_deterministic_ties() {
+        let mut world = zero_gravity_world();
+        for (pair_index, x, y) in [
+            (0, 0.0, 0.0),
+            (1, 1.0, 2.0),
+            (2, 0.0, 1.0),
+            (3, -1.0, 2.0),
+            (4, -1.0, 2.0),
+        ] {
+            world.active_contacts.push(ActiveContact {
+                body_a: pair_index as usize,
+                body_b: ContactBodyIndex::Static(0),
+                point: Position::from_meters(x, y).unwrap().into(),
+                normal: UnitVector::X,
+                penetration: Length::ZERO,
+                correct_position: true,
+            });
+        }
+
+        sort_top_down(&mut world);
+
+        let body_indices = world
+            .active_contacts
+            .iter()
+            .map(|contact| contact.body_a)
+            .collect::<alloc::vec::Vec<_>>();
+        assert_eq!(body_indices, [3, 4, 1, 2, 0]);
     }
 
     #[test]
@@ -181,7 +240,8 @@ mod tests {
         let stats = world.step();
 
         assert_eq!(stats.contacts, 1);
-        assert_eq!(world.contacts()[0].body_a, BodyId::new(1));
-        assert_eq!(world.contacts()[0].body_b, BodyId::new(2));
+        let contact = world.contacts().next().unwrap();
+        assert_eq!(contact.body_a, BodyId::new(1));
+        assert_eq!(contact.body_b, BodyId::new(2));
     }
 }

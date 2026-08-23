@@ -23,4 +23,6 @@ pub use quantity::{
     LinearAcceleration, LinearVelocity, Mass, Position,
 };
 pub use transform::Transform;
-pub use world::{AddBodyError, AddJointError, AddMouseJointError, StepStats, World, WorldSettings};
+pub use world::{
+    AddBodyError, AddJointError, AddMouseJointError, Contacts, StepStats, World, WorldSettings,
+};

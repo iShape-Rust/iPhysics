@@ -26,7 +26,7 @@ impl World {
         contact_detection::wake_impacted_bodies(self);
 
         let mut contact_states =
-            vec![contact_solver::ContactImpulseState::default(); self.contacts.len()];
+            vec![contact_solver::ContactImpulseState::default(); self.active_contacts.len()];
         let mut mouse_states =
             vec![mouse_solver::MouseImpulseState::default(); self.mouse_joints.len()];
         let mut distance_states =
@@ -38,7 +38,7 @@ impl World {
             joint_solver::solve_distance_velocities(self, &mut distance_states, reverse);
             joint_solver::solve_rope_velocities(self, &mut rope_states, reverse);
             mouse_solver::solve_velocities(self, &mut mouse_states, reverse);
-            contact_solver::solve_velocities(self, &mut contact_states, reverse);
+            contact_solver::solve_velocities(self, &mut contact_states);
         }
         contact_solver::correct_positions(self);
         self.integrate_transforms();
@@ -83,9 +83,9 @@ impl World {
 
     fn update_sleep_states(&mut self, stats: &mut StepStats) {
         let mut has_contact = vec![false; self.bodies.len()];
-        for pair in self.contact_pairs.iter().copied() {
-            has_contact[pair.a] = true;
-            if let ContactBodyIndex::Dynamic(index_b) = pair.b {
+        for contact in self.active_contacts.iter().copied() {
+            has_contact[contact.body_a] = true;
+            if let ContactBodyIndex::Dynamic(index_b) = contact.body_b {
                 has_contact[index_b] = true;
             }
         }
@@ -153,7 +153,7 @@ mod tests {
 
         first.step();
         let mut replay = first.clone();
-        first.contacts.clear();
+        first.active_contacts.clear();
 
         for _ in 0..32 {
             first.step();

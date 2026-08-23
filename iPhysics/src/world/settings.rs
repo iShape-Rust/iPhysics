@@ -27,7 +27,7 @@ impl WorldSettings {
                 Some(value) => value,
                 None => unreachable!(),
             },
-            velocity_iterations: 4,
+            velocity_iterations: 6,
             sleep: SleepConfig::FAST_EFFECTS,
         }
     }
@@ -53,5 +53,10 @@ mod tests {
         assert_eq!(settings.linear_damping.raw(), DEFAULT_DAMPING_RAW);
         assert_eq!(settings.angular_damping.raw(), DEFAULT_DAMPING_RAW);
         assert!((settings.linear_damping.coefficient() - 0.001).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn default_solver_uses_six_velocity_iterations() {
+        assert_eq!(WorldSettings::default().velocity_iterations, 6);
     }
 }

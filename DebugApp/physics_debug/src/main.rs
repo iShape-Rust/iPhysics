@@ -468,7 +468,7 @@ impl PhysicsDebugApp {
         for contact in self.world.contacts() {
             let [x, y] = contact.point.to_meters();
             let point = Pos2::new(x as f32, y as f32);
-            let normal = response_normal_on_body_a(contact);
+            let normal = response_normal_on_body_a(&contact);
             let screen_point = self.camera.screen_from_world(rect, point);
             let screen_tip = self.camera.screen_from_world(rect, point + normal * 0.7);
             let color = Color32::from_rgb(255, 205, 86);
