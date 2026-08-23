@@ -95,25 +95,13 @@ pub(super) fn build_contacts(world: &mut World) -> StepStats {
 }
 
 fn sort_top_down(world: &mut World) {
-    world.active_contacts.sort_unstable_by(|a, b| {
+    world.active_contacts.sort_by(|a, b| {
         let [ax, ay] = a.point.raw();
         let [bx, by] = b.point.raw();
         by.cmp(&ay)
             .then_with(|| ax.cmp(&bx))
             .then_with(|| a.body_a.cmp(&b.body_a))
-            .then_with(|| contact_body_key(a.body_b).cmp(&contact_body_key(b.body_b)))
-            .then_with(|| a.normal.raw().cmp(&b.normal.raw()))
-            .then_with(|| a.penetration.raw().cmp(&b.penetration.raw()))
-            .then_with(|| b.correct_position.cmp(&a.correct_position))
     });
-}
-
-#[inline(always)]
-fn contact_body_key(body: ContactBodyIndex) -> (u8, usize) {
-    match body {
-        ContactBodyIndex::Dynamic(index) => (0, index),
-        ContactBodyIndex::Static(index) => (1, index),
-    }
 }
 
 pub(super) fn wake_impacted_bodies(world: &mut World) {

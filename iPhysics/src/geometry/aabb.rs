@@ -1,5 +1,5 @@
+use i_triangle::i_overlay::i_float::int::rect::IntRect;
 use super::GeometryPoint;
-use i_float::int::rect::IntRect;
 
 /// Axis-aligned world-space boundary stored as raw Q16 coordinates.
 ///

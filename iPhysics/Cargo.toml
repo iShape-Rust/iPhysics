@@ -10,4 +10,4 @@ repository = "https://github.com/iShape-Rust/iTriangle"
 
 
 [dependencies]
-i_float = { path = "../../iFloat", default-features = false, features = ["core"] }
+i_triangle = "0.47.0"
