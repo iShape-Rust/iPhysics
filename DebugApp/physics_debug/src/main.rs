@@ -28,6 +28,7 @@ enum Scenario {
     RestitutionComparison,
     OffCenterImpact,
     BoxStack,
+    BoxPyramid,
     CircleVsConvex,
     ConvexVsConvex,
     CompositePlayground,
@@ -41,7 +42,7 @@ enum Scenario {
 }
 
 impl Scenario {
-    const ALL: [Self; 20] = [
+    const ALL: [Self; 21] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
@@ -52,6 +53,7 @@ impl Scenario {
         Self::RestitutionComparison,
         Self::OffCenterImpact,
         Self::BoxStack,
+        Self::BoxPyramid,
         Self::CircleVsConvex,
         Self::ConvexVsConvex,
         Self::CompositePlayground,
@@ -76,6 +78,7 @@ impl Scenario {
             Self::RestitutionComparison => "Restitution comparison",
             Self::OffCenterImpact => "Off-center impact",
             Self::BoxStack => "Box stack stability",
+            Self::BoxPyramid => "Box pyramid (base 7)",
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
@@ -107,6 +110,7 @@ impl Scenario {
                 "A circle strikes above a box center to exercise angular impulse response."
             }
             Self::BoxStack => "Six slightly rotated boxes test resting-contact stability.",
+            Self::BoxPyramid => "Twenty-eight squares form a seven-row pyramid on a flat floor.",
             Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
             Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
             Self::CompositePlayground => {
@@ -1150,6 +1154,31 @@ fn build_world(scenario: Scenario) -> World {
             }
             world
         }
+        Scenario::BoxPyramid => {
+            const BASE_COUNT: usize = 7;
+            const HALF_EXTENT: f64 = 0.32;
+            const SPACING: f64 = 0.68;
+            const BOTTOM_Y: f64 = -0.66;
+
+            let mut world = World::default();
+            let material = Material::new(0.0, 0.8).unwrap();
+            add_static(&mut world, flat_floor(1, material));
+            let square = rectangle(HALF_EXTENT, HALF_EXTENT);
+            let mut id = 2;
+            for row in 0..BASE_COUNT {
+                let count = BASE_COUNT - row;
+                let y = BOTTOM_Y + row as f64 * SPACING;
+                for column in 0..count {
+                    let x = (column as f64 - (count - 1) as f64 * 0.5) * SPACING;
+                    add(
+                        &mut world,
+                        dynamic_convex(id, x, y, Angle::ZERO, square, 0.0, 0.0, material),
+                    );
+                    id += 1;
+                }
+            }
+            world
+        }
         Scenario::CircleVsConvex => {
             let mut world = zero_gravity_world();
             add(
@@ -1908,6 +1937,7 @@ mod tests {
             Scenario::RestitutionComparison,
             Scenario::OffCenterImpact,
             Scenario::BoxStack,
+            Scenario::BoxPyramid,
             Scenario::CircleVsConvex,
             Scenario::ConvexVsConvex,
             Scenario::CompositePlayground,
@@ -1920,6 +1950,29 @@ mod tests {
             }
             assert!(contact_seen, "{} produced no contacts", scenario.label());
         }
+    }
+
+    #[test]
+    fn box_pyramid_has_seven_squares_at_its_base() {
+        let world = build_world(Scenario::BoxPyramid);
+        let material = Material::new(0.0, 0.8).unwrap();
+        assert_eq!(world.static_body_count(), 1);
+        assert_eq!(world.body_count(), 7 + 6 + 5 + 4 + 3 + 2 + 1);
+        assert_eq!(world.static_bodies()[0].material(), material);
+        assert!(
+            world
+                .bodies()
+                .iter()
+                .all(|body| body.material() == material)
+        );
+
+        let base_y = world.bodies()[0].state().transform().position.to_meters()[1];
+        let base = world
+            .bodies()
+            .iter()
+            .filter(|body| body.state().transform().position.to_meters()[1] == base_y)
+            .count();
+        assert_eq!(base, 7);
     }
 
     #[test]

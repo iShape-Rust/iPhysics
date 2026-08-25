@@ -35,12 +35,13 @@ impl World {
             vec![joint_solver::DistanceImpulseState::default(); self.distance_joints.len()];
         let mut rope_states =
             vec![joint_solver::RopeImpulseState::default(); self.rope_joints.len()];
-        for iteration in 0..self.settings.velocity_iterations.max(1) {
-            let reverse = iteration % 2 != 0;
+        let mut reverse = false;
+        for _ in 0..self.settings.velocity_iterations.max(1) {
             joint_solver::solve_distance_velocities(self, &mut distance_states, reverse);
             joint_solver::solve_rope_velocities(self, &mut rope_states, reverse);
             mouse_solver::solve_velocities(self, &mut mouse_states, reverse);
             contact_solver::solve_velocities(self, &mut contact_states);
+            reverse = !reverse;
         }
         contact_solver::correct_positions(self);
         self.integrate_transforms();

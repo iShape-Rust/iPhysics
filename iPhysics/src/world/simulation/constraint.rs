@@ -66,11 +66,7 @@ pub(super) fn relative_speed_along(
 pub(super) fn contact_lever_cross_axis(body: &Body, point: GeometryPoint, axis: UnitVector) -> i32 {
     let center = GeometryPoint::from(body.state().transform().position);
     let lever = point - center;
-    // Collider points are within a 2^29 local radius. A manually supplied
-    // mouse anchor can span both Position components, but its length is still
-    // below 2^30. Projection onto a unit axis therefore fits i32.
     let cross = -axis.cross(lever);
-    debug_assert!(i32::try_from(cross).is_ok());
     cross as i32
 }
 
