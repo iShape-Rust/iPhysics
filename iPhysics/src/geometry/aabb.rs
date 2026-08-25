@@ -70,11 +70,6 @@ impl Aabb {
     pub(crate) fn intersects(self, other: Self) -> bool {
         self.0.is_intersect_border_include(&other.0)
     }
-
-    #[inline(always)]
-    pub(crate) fn union(self, other: Self) -> Self {
-        Self(IntRect::with_rects(&self.0, &other.0))
-    }
 }
 
 #[cfg(test)]
@@ -111,21 +106,5 @@ mod tests {
             )
             .is_none()
         );
-    }
-
-    #[test]
-    fn union_contains_both_boundaries() {
-        let a = Aabb::from_points(
-            GeometryPoint::from_i32_unchecked(-5, 3),
-            GeometryPoint::from_i32_unchecked(4, 8),
-        );
-        let b = Aabb::from_points(
-            GeometryPoint::from_i32_unchecked(2, -7),
-            GeometryPoint::from_i32_unchecked(9, 5),
-        );
-        let union = a.union(b);
-
-        assert_eq!(union.min(), GeometryPoint::from_i32_unchecked(-5, -7));
-        assert_eq!(union.max(), GeometryPoint::from_i32_unchecked(9, 8));
     }
 }

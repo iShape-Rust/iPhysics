@@ -9,7 +9,8 @@ use crate::quantity::Length;
 use alloc::vec::Vec;
 use core::{fmt, iter::FusedIterator, slice};
 
-pub use settings::WorldSettings;
+pub use settings::{BroadPhase, GridBroadPhase, WorldSettings};
+use simulation::BroadPhaseScratch;
 pub use simulation::StepStats;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,7 @@ pub struct World {
     mouse_joints: Vec<MouseJoint>,
     distance_joints: Vec<DistanceJoint>,
     rope_joints: Vec<RopeJoint>,
+    broad_phase_scratch: BroadPhaseScratch,
 }
 
 /// Solver contact using direct indices into the world's body storage.
@@ -146,6 +148,7 @@ impl World {
             mouse_joints: Vec::new(),
             distance_joints: Vec::new(),
             rope_joints: Vec::new(),
+            broad_phase_scratch: BroadPhaseScratch::new(),
         }
     }
 
@@ -492,7 +495,7 @@ impl Default for World {
 mod tests {
     use super::*;
     use crate::body::{BodyState, Material};
-    use crate::collider::{Circle, CompositeCollider};
+    use crate::collider::Circle;
     use crate::quantity::{
         Angle, AngularVelocity, Force, Length, LinearAcceleration, LinearVelocity, Mass, Position,
     };
@@ -520,12 +523,7 @@ mod tests {
         StaticBody::new(
             BodyId::new(id),
             Transform::new(Position::from_meters(x, 0.0).unwrap(), Angle::ZERO),
-            CompositeCollider::single(
-                Circle::new(Length::from_meters(0.1).unwrap())
-                    .unwrap()
-                    .into(),
-            )
-            .unwrap(),
+            Circle::new(Length::from_meters(0.1).unwrap()).unwrap(),
             Material::INELASTIC,
         )
     }
@@ -606,12 +604,7 @@ mod tests {
         let static_body = StaticBody::new(
             BodyId::new(7),
             Transform::IDENTITY,
-            CompositeCollider::single(
-                Circle::new(Length::from_meters(1.0).unwrap())
-                    .unwrap()
-                    .into(),
-            )
-            .unwrap(),
+            Circle::new(Length::from_meters(1.0).unwrap()).unwrap(),
             Material::INELASTIC,
         );
 

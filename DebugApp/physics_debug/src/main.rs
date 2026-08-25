@@ -7,10 +7,9 @@ use eframe::egui::{
 };
 use grid::Grid;
 use i_physics::{
-    Aabb, Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Collider, ColliderPart,
-    CompositeCollider, Contact, Convex, DistanceJoint, Force, Length, LinearAcceleration,
-    LinearVelocity, Mass, Material, MouseJoint, Position, RopeJoint, StaticBody, StepStats,
-    Transform, World, WorldSettings,
+    Aabb, Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Collider, Contact, Convex,
+    DistanceJoint, Force, Length, LinearAcceleration, LinearVelocity, Mass, Material, MouseJoint,
+    Position, RopeJoint, StaticBody, StepStats, Transform, World, WorldSettings,
 };
 use std::time::{Duration, Instant};
 
@@ -427,18 +426,15 @@ impl PhysicsDebugApp {
 
         for body in self.world.static_bodies() {
             let color = Color32::from_rgb(126, 132, 145);
-            for part in body.collider().parts() {
-                let transform = body.transform().compose(part.local_transform());
-                paint_collider(
-                    &painter,
-                    rect,
-                    &self.camera,
-                    part.collider(),
-                    transform,
-                    color,
-                    2.0,
-                );
-            }
+            paint_collider(
+                &painter,
+                rect,
+                &self.camera,
+                body.collider(),
+                body.transform(),
+                color,
+                2.0,
+            );
             paint_body_id(
                 &painter,
                 rect,
@@ -973,7 +969,9 @@ fn build_world(scenario: Scenario) -> World {
         }
         Scenario::FrictionComparison => {
             let mut world = World::default();
-            add_static(&mut world, parallel_tracks(1));
+            for track in parallel_tracks(10) {
+                add_static(&mut world, track);
+            }
             for (id, y, friction) in [(2, 3.2, 0.0), (3, 0.2, 0.5), (4, -2.8, 2.0)] {
                 add(
                     &mut world,
@@ -1140,7 +1138,9 @@ fn build_world(scenario: Scenario) -> World {
         }
         Scenario::CompositePlayground => {
             let mut world = World::default();
-            add_static(&mut world, composite_playground(1));
+            for part in composite_playground(10) {
+                add_static(&mut world, part);
+            }
             add(
                 &mut world,
                 dynamic(2, -2.4, 4.0, 0.55, 0.0, 0.0, Material::INELASTIC),
@@ -1545,8 +1545,7 @@ fn flat_floor(id: u64, material: Material) -> StaticBody {
     StaticBody::new(
         BodyId::new(id),
         Transform::new(Position::from_meters(0.0, -1.25).unwrap(), Angle::ZERO),
-        CompositeCollider::single(rectangle(5.5, 0.25).into())
-            .expect("flat floor collider must fit"),
+        rectangle(5.5, 0.25),
         material,
     )
 }
@@ -1558,8 +1557,7 @@ fn inclined_floor(id: u64, degrees: f64, material: Material) -> StaticBody {
             Position::from_meters(0.0, 0.0).unwrap(),
             angle_degrees(degrees),
         ),
-        CompositeCollider::single(rectangle(5.0, 0.2).into())
-            .expect("inclined floor collider must fit"),
+        rectangle(5.0, 0.2),
         material,
     )
 }
@@ -1568,79 +1566,65 @@ fn harpoon_wall(id: u64) -> StaticBody {
     StaticBody::new(
         BodyId::new(id),
         Transform::new(Position::from_meters(4.55, 1.0).unwrap(), Angle::ZERO),
-        CompositeCollider::single(rectangle(0.3, 4.5).into())
-            .expect("harpoon wall collider must fit"),
+        rectangle(0.3, 4.5),
         Material::INELASTIC,
     )
 }
 
-fn parallel_tracks(id: u64) -> StaticBody {
-    let parts = [2.5, -0.5, -3.5]
-        .into_iter()
-        .map(|y| {
-            ColliderPart::new(
-                Transform::new(Position::from_meters(0.0, y).unwrap(), Angle::ZERO),
-                rectangle(5.5, 0.18).into(),
-            )
-        })
-        .collect();
-
-    StaticBody::new(
-        BodyId::new(id),
-        Transform::IDENTITY,
-        CompositeCollider::new(parts).expect("parallel track parts must fit"),
-        Material::new(0.0, 0.0).unwrap(),
-    )
+fn parallel_tracks(first_id: u64) -> [StaticBody; 3] {
+    let ys = [2.5, -0.5, -3.5];
+    core::array::from_fn(|index| {
+        StaticBody::new(
+            BodyId::new(first_id + index as u64),
+            Transform::new(Position::from_meters(0.0, ys[index]).unwrap(), Angle::ZERO),
+            rectangle(5.5, 0.18),
+            Material::new(0.0, 0.0).unwrap(),
+        )
+    })
 }
 
 fn static_support(id: u64) -> StaticBody {
     StaticBody::new(
         BodyId::new(id),
         Transform::new(Position::from_meters(0.0, -100.5).unwrap(), Angle::ZERO),
-        CompositeCollider::single(
-            Circle::new(Length::from_meters(100.0).unwrap())
-                .unwrap()
-                .into(),
-        )
-        .expect("static support collider must fit"),
+        Circle::new(Length::from_meters(100.0).unwrap()).unwrap(),
         Material::INELASTIC,
     )
 }
 
-fn composite_playground(id: u64) -> StaticBody {
-    let parts = vec![
-        ColliderPart::new(
+fn composite_playground(first_id: u64) -> [StaticBody; 4] {
+    [
+        StaticBody::new(
+            BodyId::new(first_id),
             Transform::new(Position::from_meters(0.0, -0.65).unwrap(), Angle::ZERO),
-            rectangle(5.5, 0.3).into(),
+            rectangle(5.5, 0.3),
+            Material::INELASTIC,
         ),
-        ColliderPart::new(
+        StaticBody::new(
+            BodyId::new(first_id + 1),
             Transform::new(
                 Position::from_meters(-3.3, 0.25).unwrap(),
                 angle_degrees(14.0),
             ),
-            rectangle(2.0, 0.18).into(),
+            rectangle(2.0, 0.18),
+            Material::INELASTIC,
         ),
-        ColliderPart::new(
+        StaticBody::new(
+            BodyId::new(first_id + 2),
             Transform::new(
                 Position::from_meters(3.3, 0.25).unwrap(),
                 angle_degrees(-14.0),
             ),
-            rectangle(2.0, 0.18).into(),
+            rectangle(2.0, 0.18),
+            Material::INELASTIC,
         ),
-        ColliderPart::new(
+        StaticBody::new(
+            BodyId::new(first_id + 3),
             Transform::new(Position::from_meters(0.0, 0.15).unwrap(), Angle::ZERO),
-            Circle::new(Length::from_meters(0.7).unwrap())
-                .unwrap()
-                .into(),
+            Circle::new(Length::from_meters(0.7).unwrap()).unwrap(),
+            Material::INELASTIC,
         ),
-    ];
-
-    StaticBody::new(
-        BodyId::new(id),
-        Transform::IDENTITY,
-        CompositeCollider::new(parts).expect("playground parts must fit"),
-        Material::INELASTIC,
-    )
+    ]
 }
 
 fn add(world: &mut World, body: Body) {

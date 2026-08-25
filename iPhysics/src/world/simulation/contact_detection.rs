@@ -1,42 +1,153 @@
+mod brute_force;
+mod grid;
+
 use super::StepStats;
 use super::constraint::{relative_normal_speed, two_bodies_mut};
+use crate::body::{Body, StaticBody};
 use crate::collision::collide;
-use crate::world::{ActiveContact, ContactBodyIndex, World};
+use crate::geometry::Aabb;
+use crate::world::{ActiveContact, BroadPhase, ContactBodyIndex, World};
+use alloc::vec::Vec;
 
 const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
+const AUTO_BRUTE_FORCE_LIMIT: usize = 64;
+
+#[derive(Debug, Clone, Copy)]
+struct AabbProxy {
+    aabb: Aabb,
+    body: ContactBodyIndex,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(in crate::world) struct BroadPhaseScratch {
+    proxies: Vec<AabbProxy>,
+    grid: grid::Scratch,
+}
+
+impl BroadPhaseScratch {
+    pub(in crate::world) const fn new() -> Self {
+        Self {
+            proxies: Vec::new(),
+            grid: grid::Scratch::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.proxies.clear();
+        self.grid.clear();
+    }
+}
 
 pub(super) fn build_contacts(world: &mut World) -> StepStats {
     world.active_contacts.clear();
     let mut stats = StepStats::default();
 
-    for index_a in 0..world.bodies.len() {
-        let a = &world.bodies[index_a];
-        let aabb_a = a.collider().aabb(a.state().transform());
+    {
+        let bodies = &world.bodies;
+        let static_bodies = &world.static_bodies;
+        let active_contacts = &mut world.active_contacts;
+        let scratch = &mut world.broad_phase_scratch;
+        build_proxies(bodies, static_bodies, &mut scratch.proxies);
 
-        for index_b in index_a + 1..world.bodies.len() {
-            let b = &world.bodies[index_b];
-            if a.state().is_sleeping() && b.state().is_sleeping() {
-                continue;
+        match world.settings.broad_phase {
+            BroadPhase::BruteForce => brute_force::detect(
+                bodies,
+                static_bodies,
+                active_contacts,
+                &scratch.proxies,
+                &mut stats,
+            ),
+            BroadPhase::Grid(settings) => grid::detect(
+                bodies,
+                static_bodies,
+                active_contacts,
+                &scratch.proxies,
+                &mut scratch.grid,
+                settings,
+                &mut stats,
+            ),
+            BroadPhase::Auto(_) if scratch.proxies.len() <= AUTO_BRUTE_FORCE_LIMIT => {
+                brute_force::detect(
+                    bodies,
+                    static_bodies,
+                    active_contacts,
+                    &scratch.proxies,
+                    &mut stats,
+                )
+            }
+            BroadPhase::Auto(settings) => grid::detect(
+                bodies,
+                static_bodies,
+                active_contacts,
+                &scratch.proxies,
+                &mut scratch.grid,
+                settings,
+                &mut stats,
+            ),
+        }
+
+        scratch.clear();
+    }
+
+    sort_top_down(world);
+    stats.contacts = world.active_contacts.len();
+    stats
+}
+
+fn build_proxies(bodies: &[Body], static_bodies: &[StaticBody], proxies: &mut Vec<AabbProxy>) {
+    proxies.clear();
+    proxies.reserve(bodies.len() + static_bodies.len());
+    for (index, body) in bodies.iter().enumerate() {
+        proxies.push(AabbProxy {
+            aabb: body.collider().aabb(body.state().transform()),
+            body: ContactBodyIndex::Dynamic(index),
+        });
+    }
+    for (index, body) in static_bodies.iter().enumerate() {
+        proxies.push(AabbProxy {
+            aabb: body.aabb(),
+            body: ContactBodyIndex::Static(index),
+        });
+    }
+}
+
+fn detect_pair(
+    bodies: &[Body],
+    static_bodies: &[StaticBody],
+    active_contacts: &mut Vec<ActiveContact>,
+    a: AabbProxy,
+    b: AabbProxy,
+    stats: &mut StepStats,
+) {
+    match (a.body, b.body) {
+        (ContactBodyIndex::Dynamic(index_a), ContactBodyIndex::Dynamic(index_b)) => {
+            let (index_a, index_b, aabb_a, aabb_b) = if index_a < index_b {
+                (index_a, index_b, a.aabb, b.aabb)
+            } else {
+                (index_b, index_a, b.aabb, a.aabb)
+            };
+            let body_a = &bodies[index_a];
+            let body_b = &bodies[index_b];
+            if body_a.state().is_sleeping() && body_b.state().is_sleeping() {
+                return;
             }
 
             stats.tested_pairs += 1;
-            let aabb_b = b.collider().aabb(b.state().transform());
             if !aabb_a.intersects(aabb_b) {
-                continue;
+                return;
             }
             stats.aabb_pairs += 1;
-
             if let Some(manifold) = collide(
-                a.id(),
-                a.collider(),
-                a.state().transform(),
-                b.id(),
-                b.collider(),
-                b.state().transform(),
+                body_a.id(),
+                body_a.collider(),
+                body_a.state().transform(),
+                body_b.id(),
+                body_b.collider(),
+                body_b.state().transform(),
             ) {
                 for (point_index, contact) in manifold.into_contacts().enumerate() {
-                    world.active_contacts.push(ActiveContact {
+                    active_contacts.push(ActiveContact {
                         body_a: index_a,
                         body_b: ContactBodyIndex::Dynamic(index_b),
                         point: contact.point,
@@ -47,51 +158,76 @@ pub(super) fn build_contacts(world: &mut World) -> StepStats {
                 }
             }
         }
-
-        if a.state().is_sleeping() {
-            continue;
+        (ContactBodyIndex::Dynamic(index), ContactBodyIndex::Static(static_index)) => {
+            detect_dynamic_static(
+                bodies,
+                static_bodies,
+                active_contacts,
+                index,
+                static_index,
+                a.aabb,
+                b.aabb,
+                stats,
+            );
         }
-
-        for (static_index, static_body) in world.static_bodies.iter().enumerate() {
-            if !aabb_a.intersects(static_body.aabb()) {
-                continue;
-            }
-
-            for part in static_body.collider().parts() {
-                stats.tested_pairs += 1;
-                let part_transform = static_body.transform().compose(part.local_transform());
-                let part_aabb = part.collider().aabb(part_transform);
-                if !aabb_a.intersects(part_aabb) {
-                    continue;
-                }
-                stats.aabb_pairs += 1;
-
-                if let Some(manifold) = collide(
-                    a.id(),
-                    a.collider(),
-                    a.state().transform(),
-                    static_body.id(),
-                    part.collider(),
-                    part_transform,
-                ) {
-                    for (point_index, contact) in manifold.into_contacts().enumerate() {
-                        world.active_contacts.push(ActiveContact {
-                            body_a: index_a,
-                            body_b: ContactBodyIndex::Static(static_index),
-                            point: contact.point,
-                            normal: contact.normal,
-                            penetration: contact.penetration,
-                            correct_position: point_index == 0,
-                        });
-                    }
-                }
-            }
+        (ContactBodyIndex::Static(static_index), ContactBodyIndex::Dynamic(index)) => {
+            detect_dynamic_static(
+                bodies,
+                static_bodies,
+                active_contacts,
+                index,
+                static_index,
+                b.aabb,
+                a.aabb,
+                stats,
+            );
         }
+        (ContactBodyIndex::Static(_), ContactBodyIndex::Static(_)) => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn detect_dynamic_static(
+    bodies: &[Body],
+    static_bodies: &[StaticBody],
+    active_contacts: &mut Vec<ActiveContact>,
+    index: usize,
+    static_index: usize,
+    aabb: Aabb,
+    static_aabb: Aabb,
+    stats: &mut StepStats,
+) {
+    let body = &bodies[index];
+    if body.state().is_sleeping() {
+        return;
     }
 
-    sort_top_down(world);
-    stats.contacts = world.active_contacts.len();
-    stats
+    stats.tested_pairs += 1;
+    if !aabb.intersects(static_aabb) {
+        return;
+    }
+    stats.aabb_pairs += 1;
+
+    let static_body = &static_bodies[static_index];
+    if let Some(manifold) = collide(
+        body.id(),
+        body.collider(),
+        body.state().transform(),
+        static_body.id(),
+        static_body.collider(),
+        static_body.transform(),
+    ) {
+        for (point_index, contact) in manifold.into_contacts().enumerate() {
+            active_contacts.push(ActiveContact {
+                body_a: index,
+                body_b: ContactBodyIndex::Static(static_index),
+                point: contact.point,
+                normal: contact.normal,
+                penetration: contact.penetration,
+                correct_position: point_index == 0,
+            });
+        }
+    }
 }
 
 fn sort_top_down(world: &mut World) {
@@ -143,31 +279,46 @@ pub(super) fn wake_impacted_bodies(world: &mut World) {
 mod tests {
     use super::*;
     use crate::UnitVector;
-    use crate::body::{Body, BodyId, BodyState, Material, StaticBody};
-    use crate::collider::{Circle, ColliderPart, CompositeCollider};
+    use crate::body::{BodyId, BodyState, Material};
+    use crate::collider::Circle;
     use crate::quantity::{
         Angle, AngularVelocity, Length, LinearAcceleration, LinearVelocity, Mass, Position,
     };
     use crate::transform::Transform;
-    use crate::world::WorldSettings;
-    use alloc::vec;
+    use crate::world::{GridBroadPhase, WorldSettings};
 
-    fn circle_body(id: u64, x: f64) -> Body {
+    fn zero_gravity_world() -> World {
+        World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    }
+
+    fn circle_body(id: u64, x: f64, y: f64, radius: f64) -> Body {
         Body::dynamic(
             BodyId::new(id),
-            Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+            Circle::new(Length::from_meters(radius).unwrap()).unwrap(),
             Mass::ONE,
             Material::INELASTIC,
             BodyState::new(
-                Transform::new(Position::from_meters(x, 0.0).unwrap(), Angle::ZERO),
+                Transform::new(Position::from_meters(x, y).unwrap(), Angle::ZERO),
                 LinearVelocity::ZERO,
                 AngularVelocity::ZERO,
             ),
         )
     }
 
-    fn zero_gravity_world() -> World {
-        World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    fn static_circle(id: u64, x: f64, y: f64, radius: f64) -> StaticBody {
+        StaticBody::new(
+            BodyId::new(id),
+            Transform::new(Position::from_meters(x, y).unwrap(), Angle::ZERO),
+            Circle::new(Length::from_meters(radius).unwrap()).unwrap(),
+            Material::INELASTIC,
+        )
+    }
+
+    fn contacts_with(world: &World, broad_phase: BroadPhase) -> (Vec<ActiveContact>, StepStats) {
+        let mut world = world.clone();
+        world.settings.broad_phase = broad_phase;
+        let stats = build_contacts(&mut world);
+        (world.active_contacts, stats)
     }
 
     #[test]
@@ -201,35 +352,116 @@ mod tests {
     }
 
     #[test]
-    fn composite_part_identity_is_discarded_after_narrow_phase() {
+    fn grid_matches_brute_force_for_dynamic_and_static_bodies() {
         let mut world = zero_gravity_world();
-        world.add_body(circle_body(1, 3.0)).unwrap();
-        let small_circle = Circle::new(Length::from_meters(0.5).unwrap()).unwrap();
-        let composite = CompositeCollider::new(vec![
-            ColliderPart::new(
-                Transform::new(Position::from_meters(-3.0, 0.0).unwrap(), Angle::ZERO),
-                small_circle.into(),
-            ),
-            ColliderPart::new(
-                Transform::new(Position::from_meters(3.5, 0.0).unwrap(), Angle::ZERO),
-                small_circle.into(),
-            ),
-        ])
-        .unwrap();
+        for (id, x, y, radius) in [
+            (1, -4.0, 0.0, 2.0),
+            (2, -1.0, 0.0, 2.0),
+            (3, 1.5, 0.0, 1.0),
+            (4, 8.0, 1.0, 1.5),
+            (5, 10.0, 1.0, 1.0),
+        ] {
+            world.add_body(circle_body(id, x, y, radius)).unwrap();
+        }
         world
-            .add_static_body(StaticBody::new(
-                BodyId::new(2),
-                Transform::IDENTITY,
-                composite,
-                Material::INELASTIC,
-            ))
+            .add_static_body(static_circle(100, -2.0, -2.5, 1.0))
+            .unwrap();
+        world
+            .add_static_body(static_circle(101, 9.0, -1.0, 1.25))
             .unwrap();
 
-        let stats = world.step();
+        let brute = contacts_with(&world, BroadPhase::BruteForce);
+        let grid = contacts_with(&world, BroadPhase::Grid(GridBroadPhase::new(0).unwrap()));
 
+        assert_eq!(grid.0, brute.0);
+        assert_eq!(grid.1.aabb_pairs, brute.1.aabb_pairs);
+        assert_eq!(grid.1.contacts, brute.1.contacts);
+        assert!(grid.1.tested_pairs < brute.1.tested_pairs);
+    }
+
+    #[test]
+    fn pair_spanning_many_columns_is_detected_once() {
+        let mut world = zero_gravity_world();
+        world.add_body(circle_body(1, 0.0, 0.0, 4.0)).unwrap();
+        world.add_body(circle_body(2, 1.0, 0.0, 4.0)).unwrap();
+        world.settings.broad_phase = BroadPhase::Grid(GridBroadPhase::new(0).unwrap());
+
+        let stats = build_contacts(&mut world);
+
+        assert_eq!(stats.tested_pairs, 1);
+        assert_eq!(stats.aabb_pairs, 1);
         assert_eq!(stats.contacts, 1);
-        let contact = world.contacts().next().unwrap();
-        assert_eq!(contact.body_a, BodyId::new(1));
-        assert_eq!(contact.body_b, BodyId::new(2));
+    }
+
+    #[test]
+    fn touching_on_column_boundary_remains_a_candidate() {
+        let mut world = zero_gravity_world();
+        world.add_body(circle_body(1, 0.5, 0.0, 0.5)).unwrap();
+        world.add_body(circle_body(2, 1.5, 0.0, 0.5)).unwrap();
+        world.settings.broad_phase = BroadPhase::Grid(GridBroadPhase::new(0).unwrap());
+
+        let stats = build_contacts(&mut world);
+
+        assert_eq!(stats.tested_pairs, 1);
+        assert_eq!(stats.aabb_pairs, 1);
+        assert_eq!(stats.contacts, 1);
+    }
+
+    #[test]
+    fn auto_uses_grid_above_the_brute_force_limit() {
+        let mut world = zero_gravity_world();
+        for index in 0..=AUTO_BRUTE_FORCE_LIMIT {
+            let x = -3_200.0 + 100.0 * index as f64;
+            world
+                .add_body(circle_body(index as u64 + 1, x, 0.0, 0.5))
+                .unwrap();
+        }
+        world.settings.broad_phase = BroadPhase::Auto(GridBroadPhase::default());
+
+        let stats = build_contacts(&mut world);
+
+        assert_eq!(stats.tested_pairs, 0);
+        assert_eq!(stats.contacts, 0);
+    }
+
+    #[test]
+    fn grid_matches_brute_force_across_deterministic_worlds() {
+        let mut random = 0x6d2b_79f5_u32;
+        for _ in 0..32 {
+            let mut world = zero_gravity_world();
+            for index in 0..20 {
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let x = (random % 513) as f64 * 0.25 - 64.0;
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let y = (random % 129) as f64 * 0.25 - 16.0;
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let radius = (random % 16 + 1) as f64 * 0.25;
+                world
+                    .add_body(circle_body(index + 1, x, y, radius))
+                    .unwrap();
+            }
+            for index in 0..5 {
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let x = (random % 513) as f64 * 0.25 - 64.0;
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let y = (random % 129) as f64 * 0.25 - 16.0;
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let radius = (random % 16 + 1) as f64 * 0.25;
+                world
+                    .add_static_body(static_circle(100 + index, x, y, radius))
+                    .unwrap();
+            }
+
+            let brute = contacts_with(&world, BroadPhase::BruteForce);
+            for power in [0, 4, 8] {
+                let grid = contacts_with(
+                    &world,
+                    BroadPhase::Grid(GridBroadPhase::new(power).unwrap()),
+                );
+                assert_eq!(grid.0, brute.0);
+                assert_eq!(grid.1.aabb_pairs, brute.1.aabb_pairs);
+                assert_eq!(grid.1.contacts, brute.1.contacts);
+            }
+        }
     }
 }

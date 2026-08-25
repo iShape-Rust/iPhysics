@@ -306,7 +306,7 @@ mod tests {
     use super::super::constraint::relative_normal_speed;
     use super::*;
     use crate::body::{BodyId, BodyState, Material, StaticBody};
-    use crate::collider::{Circle, CompositeCollider, Convex};
+    use crate::collider::{Circle, Convex};
     use crate::geometry::GeometryPoint;
     use crate::quantity::{
         Angle, AngularVelocity, Damping, Length, LinearAcceleration, LinearVelocity, Mass, Position,
@@ -466,12 +466,7 @@ mod tests {
             .add_static_body(StaticBody::new(
                 BodyId::new(2),
                 Transform::new(Position::from_meters(0.0, -1.0).unwrap(), Angle::ZERO),
-                CompositeCollider::single(
-                    Circle::new(Length::from_meters(0.5).unwrap())
-                        .unwrap()
-                        .into(),
-                )
-                .unwrap(),
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
                 material,
             ))
             .unwrap();
@@ -559,7 +554,7 @@ mod tests {
             .add_static_body(StaticBody::new(
                 BodyId::new(1),
                 Transform::new(Position::ZERO, angle),
-                CompositeCollider::single(rectangle(5.0, 0.2).into()).unwrap(),
+                rectangle(5.0, 0.2),
                 material,
             ))
             .unwrap();

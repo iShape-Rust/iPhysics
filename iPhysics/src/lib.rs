@@ -12,9 +12,7 @@ pub mod transform;
 pub mod world;
 
 pub use body::{Body, BodyId, BodyState, Material, SleepConfig, StaticBody};
-pub use collider::{
-    Circle, Collider, ColliderPart, CompositeCollider, CompositeColliderError, Convex, ConvexError,
-};
+pub use collider::{Circle, Collider, Convex, ConvexError};
 pub use collision::Contact;
 pub use geometry::{Aabb, GeometryPoint, UnitVector};
 pub use joint::{DistanceJoint, MouseJoint, RopeJoint};
@@ -24,5 +22,6 @@ pub use quantity::{
 };
 pub use transform::Transform;
 pub use world::{
-    AddBodyError, AddJointError, AddMouseJointError, Contacts, StepStats, World, WorldSettings,
+    AddBodyError, AddJointError, AddMouseJointError, BroadPhase, Contacts, GridBroadPhase,
+    StepStats, World, WorldSettings,
 };

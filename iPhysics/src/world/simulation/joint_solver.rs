@@ -294,7 +294,7 @@ fn mark_dynamic_endpoint(world: &World, constrained: &mut [bool], id: BodyId) {
 mod tests {
     use super::*;
     use crate::body::{BodyState, Material, SleepConfig, StaticBody};
-    use crate::collider::{Circle, CompositeCollider};
+    use crate::collider::Circle;
     use crate::joint::{DistanceJoint, RopeJoint};
     use crate::quantity::{
         Angle, AngularVelocity, Damping, Force, LinearAcceleration, LinearVelocity, Mass,
@@ -322,12 +322,7 @@ mod tests {
         StaticBody::new(
             BodyId::new(id),
             Transform::new(Position::from_meters(x, y).unwrap(), Angle::ZERO),
-            CompositeCollider::single(
-                Circle::new(Length::from_meters(0.1).unwrap())
-                    .unwrap()
-                    .into(),
-            )
-            .unwrap(),
+            Circle::new(Length::from_meters(0.1).unwrap()).unwrap(),
             Material::INELASTIC,
         )
     }

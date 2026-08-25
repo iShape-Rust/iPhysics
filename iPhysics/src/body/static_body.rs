@@ -1,5 +1,5 @@
 use super::{BodyId, Material};
-use crate::collider::CompositeCollider;
+use crate::collider::Collider;
 use crate::geometry::Aabb;
 use crate::transform::Transform;
 
@@ -8,7 +8,7 @@ use crate::transform::Transform;
 pub struct StaticBody {
     id: BodyId,
     transform: Transform,
-    collider: CompositeCollider,
+    collider: Collider,
     material: Material,
     aabb: Aabb,
 }
@@ -18,9 +18,10 @@ impl StaticBody {
     pub fn new(
         id: BodyId,
         transform: Transform,
-        collider: CompositeCollider,
+        collider: impl Into<Collider>,
         material: Material,
     ) -> Self {
+        let collider = collider.into();
         let aabb = collider.aabb(transform);
         Self {
             id,
@@ -42,8 +43,8 @@ impl StaticBody {
     }
 
     #[inline(always)]
-    pub const fn collider(&self) -> &CompositeCollider {
-        &self.collider
+    pub const fn collider(&self) -> Collider {
+        self.collider
     }
 
     #[inline(always)]

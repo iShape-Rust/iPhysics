@@ -4,6 +4,8 @@ mod contact_solver;
 mod joint_solver;
 mod mouse_solver;
 
+pub(in crate::world) use contact_detection::BroadPhaseScratch;
+
 use super::{ContactBodyIndex, World};
 use crate::body::Body;
 use alloc::vec;
@@ -116,7 +118,7 @@ impl World {
 mod tests {
     use super::*;
     use crate::body::{BodyId, BodyState, Material, SleepConfig, StaticBody};
-    use crate::collider::{Circle, CompositeCollider};
+    use crate::collider::Circle;
     use crate::quantity::{
         Angle, AngularVelocity, Damping, Length, LinearAcceleration, LinearVelocity, Mass, Position,
     };
@@ -207,12 +209,7 @@ mod tests {
             .add_static_body(StaticBody::new(
                 BodyId::new(2),
                 Transform::new(Position::from_meters(1.0, 0.0).unwrap(), Angle::ZERO),
-                CompositeCollider::single(
-                    Circle::new(Length::from_meters(0.5).unwrap())
-                        .unwrap()
-                        .into(),
-                )
-                .unwrap(),
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
                 Material::INELASTIC,
             ))
             .unwrap();

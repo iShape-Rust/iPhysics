@@ -1,5 +1,4 @@
 mod circle;
-mod composite;
 mod convex;
 mod inertia;
 
@@ -7,10 +6,9 @@ use crate::geometry::Aabb;
 use crate::transform::Transform;
 
 pub use circle::Circle;
-pub use composite::{ColliderPart, CompositeCollider, CompositeColliderError};
 pub use convex::{Convex, ConvexError, TransformedVertices};
 
-/// Inline collision geometry owned by a body or a composite part.
+/// Inline collision geometry owned by a body.
 ///
 /// Every variant is value-stored. A circle therefore also occupies the size
 /// of the largest variant, which is an intentional cache-friendly trade-off
