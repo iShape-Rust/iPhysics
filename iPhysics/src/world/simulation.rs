@@ -24,7 +24,7 @@ impl World {
         joint_solver::wake_connected_bodies(self);
         self.integrate_velocities();
 
-        let mut stats = contact_detection::build_contacts(self);
+        let mut stats = self.build_contacts();
         contact_detection::wake_impacted_bodies(self);
 
         let mut contact_states =

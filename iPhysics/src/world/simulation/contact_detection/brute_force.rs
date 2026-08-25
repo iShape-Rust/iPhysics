@@ -1,25 +1,13 @@
-use super::{AabbProxy, detect_pair};
-use crate::body::{Body, StaticBody};
-use crate::world::{ActiveContact, StepStats};
-use alloc::vec::Vec;
+use super::Detector;
 
-pub(super) fn detect(
-    bodies: &[Body],
-    static_bodies: &[StaticBody],
-    active_contacts: &mut Vec<ActiveContact>,
-    proxies: &[AabbProxy],
-    stats: &mut StepStats,
-) {
-    for index_a in 0..proxies.len() {
-        for index_b in index_a + 1..proxies.len() {
-            detect_pair(
-                bodies,
-                static_bodies,
-                active_contacts,
-                proxies[index_a],
-                proxies[index_b],
-                stats,
-            );
+impl Detector<'_> {
+    pub(super) fn detect_brute_force(&mut self) {
+        for index_a in 0..self.proxies.len() {
+            for index_b in index_a + 1..self.proxies.len() {
+                let a = self.proxies[index_a];
+                let b = self.proxies[index_b];
+                self.detect_pair(a, b);
+            }
         }
     }
 }

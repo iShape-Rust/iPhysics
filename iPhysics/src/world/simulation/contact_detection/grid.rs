@@ -1,7 +1,6 @@
-use super::{AabbProxy, detect_pair};
-use crate::body::{Body, StaticBody};
+use super::{AabbProxy, Detector};
 use crate::geometry::Aabb;
-use crate::world::{ActiveContact, GridBroadPhase, StepStats};
+use crate::world::GridBroadPhase;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone, Default)]
@@ -71,69 +70,64 @@ impl ColumnLayout {
     }
 }
 
-pub(super) fn detect(
-    bodies: &[Body],
-    static_bodies: &[StaticBody],
-    active_contacts: &mut Vec<ActiveContact>,
-    proxies: &[AabbProxy],
-    scratch: &mut Scratch,
-    settings: GridBroadPhase,
-    stats: &mut StepStats,
-) {
-    let Some(layout) = ColumnLayout::new(proxies, settings) else {
-        return;
-    };
+impl Detector<'_> {
+    pub(super) fn detect_grid(&mut self, scratch: &mut Scratch, settings: GridBroadPhase) {
+        let proxies = self.proxies;
+        let Some(layout) = ColumnLayout::new(proxies, settings) else {
+            return;
+        };
 
-    debug_assert!(bodies.len() <= u32::MAX as usize);
+        debug_assert!(self.bodies.len() <= u32::MAX as usize);
 
-    scratch.column_counts.clear();
-    scratch.column_counts.resize(layout.column_count, 0);
-    for proxy in proxies {
-        for column in layout.first(proxy.aabb)..=layout.last(proxy.aabb) {
-            scratch.column_counts[column] = scratch.column_counts[column] + 1;
-        }
-    }
-
-    scratch.column_offsets.clear();
-    scratch.column_offsets.reserve(layout.column_count + 1);
-    scratch.column_offsets.push(0);
-    let mut entry_count = 0_u32;
-    for &count in &scratch.column_counts {
-        if count >= 2 {
-            entry_count = entry_count + count;
-        }
-        scratch.column_offsets.push(entry_count);
-    }
-
-    scratch
-        .column_proxies
-        .resize(entry_count as usize, proxies[0]);
-    for (column, cursor) in scratch.column_counts.iter_mut().enumerate() {
-        *cursor = scratch.column_offsets[column];
-    }
-    for &proxy in proxies {
-        for column in layout.first(proxy.aabb)..=layout.last(proxy.aabb) {
-            if scratch.column_offsets[column] == scratch.column_offsets[column + 1] {
-                continue;
+        scratch.column_counts.clear();
+        scratch.column_counts.resize(layout.column_count, 0);
+        for proxy in proxies {
+            for column in layout.first(proxy.aabb)..=layout.last(proxy.aabb) {
+                scratch.column_counts[column] += 1;
             }
-            let cursor = &mut scratch.column_counts[column];
-            scratch.column_proxies[*cursor as usize] = proxy;
-            *cursor += 1;
         }
-    }
 
-    for column in 0..layout.column_count {
-        let start = scratch.column_offsets[column] as usize;
-        let end = scratch.column_offsets[column + 1] as usize;
-        let column_proxies = &scratch.column_proxies[start..end];
-        for index_a in 0..column_proxies.len() {
-            let a = column_proxies[index_a];
-            let a_starts_here = layout.first(a.aabb) == column;
-            for &b in &column_proxies[index_a + 1..] {
-                if !a_starts_here && layout.first(b.aabb) != column {
+        scratch.column_offsets.clear();
+        scratch.column_offsets.reserve(layout.column_count + 1);
+        scratch.column_offsets.push(0);
+        let mut entry_count = 0_u32;
+        for &count in &scratch.column_counts {
+            if count >= 2 {
+                entry_count += count;
+            }
+            scratch.column_offsets.push(entry_count);
+        }
+
+        scratch
+            .column_proxies
+            .resize(entry_count as usize, proxies[0]);
+        for (column, cursor) in scratch.column_counts.iter_mut().enumerate() {
+            *cursor = scratch.column_offsets[column];
+        }
+        for &proxy in proxies {
+            for column in layout.first(proxy.aabb)..=layout.last(proxy.aabb) {
+                if scratch.column_offsets[column] == scratch.column_offsets[column + 1] {
                     continue;
                 }
-                detect_pair(bodies, static_bodies, active_contacts, a, b, stats);
+                let cursor = &mut scratch.column_counts[column];
+                scratch.column_proxies[*cursor as usize] = proxy;
+                *cursor += 1;
+            }
+        }
+
+        for column in 0..layout.column_count {
+            let start = scratch.column_offsets[column] as usize;
+            let end = scratch.column_offsets[column + 1] as usize;
+            let column_proxies = &scratch.column_proxies[start..end];
+            for index_a in 0..column_proxies.len() {
+                let a = column_proxies[index_a];
+                let a_starts_here = layout.first(a.aabb) == column;
+                for &b in &column_proxies[index_a + 1..] {
+                    if !a_starts_here && layout.first(b.aabb) != column {
+                        continue;
+                    }
+                    self.detect_pair(a, b);
+                }
             }
         }
     }
