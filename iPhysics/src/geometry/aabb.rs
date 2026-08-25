@@ -1,5 +1,5 @@
-use i_triangle::i_overlay::i_float::int::rect::IntRect;
 use super::GeometryPoint;
+use i_triangle::i_overlay::i_float::int::rect::IntRect;
 
 /// Axis-aligned world-space boundary stored as raw Q16 coordinates.
 ///
@@ -69,6 +69,33 @@ impl Aabb {
     #[inline(always)]
     pub(crate) fn intersects(self, other: Self) -> bool {
         self.0.is_intersect_border_include(&other.0)
+    }
+
+    /// Returns the smallest boundary containing both inputs.
+    #[inline(always)]
+    pub(crate) const fn union(self, other: Self) -> Self {
+        Self::from_raw_unchecked(
+            if self.0.min_x < other.0.min_x {
+                self.0.min_x
+            } else {
+                other.0.min_x
+            },
+            if self.0.max_x > other.0.max_x {
+                self.0.max_x
+            } else {
+                other.0.max_x
+            },
+            if self.0.min_y < other.0.min_y {
+                self.0.min_y
+            } else {
+                other.0.min_y
+            },
+            if self.0.max_y > other.0.max_y {
+                self.0.max_y
+            } else {
+                other.0.max_y
+            },
+        )
     }
 }
 

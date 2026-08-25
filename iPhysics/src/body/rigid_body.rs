@@ -24,12 +24,13 @@ impl Body {
     ) -> Self {
         let collider = collider.into();
         let inverse_mass_q24 = mass.inverse_q24();
+        let inverse_inertia_q40 = collider.inverse_inertia_q40(inverse_mass_q24);
         Self {
             id,
             collider,
             material,
             inverse_mass_q24,
-            inverse_inertia_q40: collider.inverse_inertia_q40(inverse_mass_q24),
+            inverse_inertia_q40,
             state,
         }
     }
@@ -40,8 +41,8 @@ impl Body {
     }
 
     #[inline(always)]
-    pub const fn collider(&self) -> Collider {
-        self.collider
+    pub const fn collider(&self) -> &Collider {
+        &self.collider
     }
 
     #[inline(always)]

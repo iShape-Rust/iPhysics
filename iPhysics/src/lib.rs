@@ -12,7 +12,10 @@ pub mod transform;
 pub mod world;
 
 pub use body::{Body, BodyId, BodyState, Material, SleepConfig, StaticBody};
-pub use collider::{Circle, Collider, Convex, ConvexError};
+pub use collider::{
+    Circle, Collider, CompositeCollider, Convex, ConvexError, RECOMMENDED_MAX_COMPOSITE_PARTS,
+    SimpleCollider,
+};
 pub use collision::Contact;
 pub use geometry::{Aabb, GeometryPoint, UnitVector};
 pub use joint::{DistanceJoint, MouseJoint, RopeJoint};

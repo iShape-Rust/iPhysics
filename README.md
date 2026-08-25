@@ -146,6 +146,10 @@ integral about the body origin, so an offset collider automatically includes
 the parallel-axis contribution. Values outside the fixed-point range saturate;
 zero represents an angularly immovable body at solver precision.
 
+Composite colliders distribute the body's mass between their simple parts in
+proportion to part area. Every part contributes its full area, including when
+parts overlap, and offset parts include the parallel-axis contribution.
+
 **Material coefficients [`Material`](iPhysics/src/body/material.rs)** —
 restitution and Coulomb friction stored as unsigned Q16 values.
 
@@ -237,9 +241,13 @@ draws the active anchor-to-target constraint.
 
 - Body centers are always bounded `Position` values and saturate at the world
   edge during integration.
-- Circle radius must be non-zero and no greater than `2^29 - 1` raw Q16 units.
+- Circle radius must be non-zero. Its body-local center and radius together
+  must fit within the `2^29 - 1` raw Q16 collider-radius limit.
 - Every local convex vertex must be within the same radial limit and a convex
   has between 3 and 6 vertices.
+- A composite collider contains at least one circle or convex. Debug builds
+  flag composites above 16 parts because composite-pair narrow phase can grow
+  as `O(n × m)`; release builds impose no part-count limit.
 - Integer CORDIC rotation is conservatively non-expanding. Consequently, a
   valid local vertex plus any valid body center fits in the bounded
   `GeometryPoint` range without runtime clamp.

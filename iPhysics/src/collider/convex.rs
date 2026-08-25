@@ -136,6 +136,22 @@ impl Convex {
     /// Reciprocal moment of inertia of a uniform polygon about the local
     /// origin, stored as unsigned Q40.
     pub(crate) fn inverse_inertia_q40(self, inverse_mass_q24: u32) -> u64 {
+        let (twice_area, inertia_numerator) = self.inertia_integrals();
+        from_q24_per_q32_ratio(
+            inverse_mass_q24 as u128 * 6 * twice_area as u128,
+            inertia_numerator,
+        )
+    }
+
+    /// Returns proportional `(mass_weight, mass_weight * I/m)` values.
+    pub(super) fn mass_properties(self) -> (u64, u128) {
+        let (twice_area, inertia_numerator) = self.inertia_integrals();
+        // Multiplying both the area weight and its weighted inertia by six
+        // keeps this ratio exact without an early integer division.
+        (twice_area.saturating_mul(6), inertia_numerator)
+    }
+
+    fn inertia_integrals(self) -> (u64, u128) {
         let vertices = self.vertices();
         let mut twice_area = 0_i128;
         let mut inertia_numerator = 0_i128;
@@ -153,10 +169,7 @@ impl Convex {
         debug_assert!(twice_area > 0);
         debug_assert!(inertia_numerator > 0);
 
-        from_q24_per_q32_ratio(
-            inverse_mass_q24 as u128 * 6 * twice_area as u128,
-            inertia_numerator as u128,
-        )
+        (twice_area as u64, inertia_numerator as u128)
     }
 }
 

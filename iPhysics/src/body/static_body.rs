@@ -43,8 +43,8 @@ impl StaticBody {
     }
 
     #[inline(always)]
-    pub const fn collider(&self) -> Collider {
-        self.collider
+    pub const fn collider(&self) -> &Collider {
+        &self.collider
     }
 
     #[inline(always)]

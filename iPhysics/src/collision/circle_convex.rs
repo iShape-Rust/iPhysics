@@ -14,7 +14,7 @@ pub(super) fn collide(
     convex_transform: Transform,
 ) -> Option<Contact> {
     let vertices = convex.transformed_vertices(convex_transform);
-    let circle_center = circle_transform.position.into();
+    let circle_center = circle.transformed_center(circle_transform);
     let radius = circle.radius().raw() as i64;
     let mut best_index = 0;
     let mut best_separation = i64::MIN;

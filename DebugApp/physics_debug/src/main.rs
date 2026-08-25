@@ -9,7 +9,7 @@ use grid::Grid;
 use i_physics::{
     Aabb, Angle, AngularVelocity, Body, BodyId, BodyState, Circle, Collider, Contact, Convex,
     DistanceJoint, Force, Length, LinearAcceleration, LinearVelocity, Mass, Material, MouseJoint,
-    Position, RopeJoint, StaticBody, StepStats, Transform, World, WorldSettings,
+    Position, RopeJoint, SimpleCollider, StaticBody, StepStats, Transform, World, WorldSettings,
 };
 use std::time::{Duration, Instant};
 
@@ -731,17 +731,37 @@ fn body_at_point(world: &World, point: Position) -> Option<BodyId> {
         .map(Body::id)
 }
 
-fn collider_contains(collider: Collider, transform: Transform, point: Position) -> bool {
-    let point = point.raw_point();
+fn collider_contains(collider: &Collider, transform: Transform, point: Position) -> bool {
     match collider {
         Collider::Circle(circle) => {
-            let center = transform.position.raw_point();
+            simple_collider_contains(SimpleCollider::Circle(*circle), transform, point)
+        }
+        Collider::Convex(convex) => {
+            simple_collider_contains(SimpleCollider::Convex(*convex), transform, point)
+        }
+        Collider::Composite(composite) => composite
+            .simple_colliders()
+            .iter()
+            .copied()
+            .any(|collider| simple_collider_contains(collider, transform, point)),
+    }
+}
+
+fn simple_collider_contains(
+    collider: SimpleCollider,
+    transform: Transform,
+    point: Position,
+) -> bool {
+    let point = point.raw_point();
+    match collider {
+        SimpleCollider::Circle(circle) => {
+            let center = transform.apply(circle.center()).raw_point();
             let dx = point.x as i64 - center.x as i64;
             let dy = point.y as i64 - center.y as i64;
             let radius = (circle.radius().to_meters() * Position::SCALE as f64) as i64;
             dx * dx + dy * dy <= radius * radius
         }
-        Collider::Convex(convex) => {
+        SimpleCollider::Convex(convex) => {
             let vertices = convex.transformed_vertices(transform);
             let mut has_positive = false;
             let mut has_negative = false;
@@ -768,7 +788,52 @@ fn paint_collider(
     painter: &egui::Painter,
     rect: Rect,
     camera: &Camera,
-    collider: Collider,
+    collider: &Collider,
+    transform: Transform,
+    color: Color32,
+    stroke_width: f32,
+) {
+    match collider {
+        Collider::Circle(circle) => paint_simple_collider(
+            painter,
+            rect,
+            camera,
+            SimpleCollider::Circle(*circle),
+            transform,
+            color,
+            stroke_width,
+        ),
+        Collider::Convex(convex) => paint_simple_collider(
+            painter,
+            rect,
+            camera,
+            SimpleCollider::Convex(*convex),
+            transform,
+            color,
+            stroke_width,
+        ),
+        Collider::Composite(composite) => {
+            for &collider in composite.simple_colliders() {
+                paint_simple_collider(
+                    painter,
+                    rect,
+                    camera,
+                    collider,
+                    transform,
+                    color,
+                    stroke_width,
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_simple_collider(
+    painter: &egui::Painter,
+    rect: Rect,
+    camera: &Camera,
+    collider: SimpleCollider,
     transform: Transform,
     color: Color32,
     stroke_width: f32,
@@ -777,8 +842,8 @@ fn paint_collider(
     let fill = color.gamma_multiply(0.30);
 
     match collider {
-        Collider::Circle(circle) => {
-            let center = screen_position(camera, rect, transform.position);
+        SimpleCollider::Circle(circle) => {
+            let center = screen_position(camera, rect, transform.apply(circle.center()));
             let radius = circle.radius().to_meters() as f32 * camera.zoom;
             painter.circle_filled(center, radius, fill);
             painter.circle_stroke(center, radius, stroke);
@@ -787,7 +852,7 @@ fn paint_collider(
             painter.line_segment([center, radius_tip], stroke);
             painter.circle_filled(center, 2.5, color);
         }
-        Collider::Convex(convex) => {
+        SimpleCollider::Convex(convex) => {
             let points = convex
                 .transformed_vertices(transform)
                 .iter()
@@ -1914,15 +1979,16 @@ mod tests {
     #[test]
     fn pointer_hit_test_handles_circles_and_rotated_convexes() {
         let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
+        let circle_collider: Collider = circle.into();
         let circle_transform =
             Transform::new(Position::from_meters(2.0, 3.0).unwrap(), Angle::ZERO);
         assert!(collider_contains(
-            circle.into(),
+            &circle_collider,
             circle_transform,
             Position::from_meters(2.5, 3.0).unwrap(),
         ));
         assert!(!collider_contains(
-            circle.into(),
+            &circle_collider,
             circle_transform,
             Position::from_meters(3.1, 3.0).unwrap(),
         ));
@@ -1932,13 +1998,14 @@ mod tests {
             Position::from_meters(-2.0, 1.0).unwrap(),
             Angle::QUARTER_TURN,
         );
+        let box_collider: Collider = box_collider.into();
         assert!(collider_contains(
-            box_collider.into(),
+            &box_collider,
             box_transform,
             Position::from_meters(-2.4, 1.0).unwrap(),
         ));
         assert!(!collider_contains(
-            box_collider.into(),
+            &box_collider,
             box_transform,
             Position::from_meters(-2.6, 1.0).unwrap(),
         ));

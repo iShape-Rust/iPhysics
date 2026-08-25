@@ -119,25 +119,26 @@ impl Detector<'_> {
                     return;
                 }
                 self.stats.aabb_pairs += 1;
-                if let Some(manifold) = collide(
+                collide(
                     body_a.id(),
                     body_a.collider(),
                     body_a.state().transform(),
                     body_b.id(),
                     body_b.collider(),
                     body_b.state().transform(),
-                ) {
-                    for (point_index, contact) in manifold.into_contacts().enumerate() {
-                        self.active_contacts.push(ActiveContact {
-                            body_a: index_a,
-                            body_b: ContactBodyIndex::Dynamic(index_b),
-                            point: contact.point,
-                            normal: contact.normal,
-                            penetration: contact.penetration,
-                            correct_position: point_index == 0,
-                        });
-                    }
-                }
+                    |manifold| {
+                        for (point_index, contact) in manifold.into_contacts().enumerate() {
+                            self.active_contacts.push(ActiveContact {
+                                body_a: index_a,
+                                body_b: ContactBodyIndex::Dynamic(index_b),
+                                point: contact.point,
+                                normal: contact.normal,
+                                penetration: contact.penetration,
+                                correct_position: point_index == 0,
+                            });
+                        }
+                    },
+                );
             }
             (ContactBodyIndex::Dynamic(index), ContactBodyIndex::Static(static_index)) => {
                 self.detect_dynamic_static(index, static_index, a.aabb, b.aabb);
@@ -168,25 +169,26 @@ impl Detector<'_> {
         self.stats.aabb_pairs += 1;
 
         let static_body = &self.static_bodies[static_index];
-        if let Some(manifold) = collide(
+        collide(
             body.id(),
             body.collider(),
             body.state().transform(),
             static_body.id(),
             static_body.collider(),
             static_body.transform(),
-        ) {
-            for (point_index, contact) in manifold.into_contacts().enumerate() {
-                self.active_contacts.push(ActiveContact {
-                    body_a: index,
-                    body_b: ContactBodyIndex::Static(static_index),
-                    point: contact.point,
-                    normal: contact.normal,
-                    penetration: contact.penetration,
-                    correct_position: point_index == 0,
-                });
-            }
-        }
+            |manifold| {
+                for (point_index, contact) in manifold.into_contacts().enumerate() {
+                    self.active_contacts.push(ActiveContact {
+                        body_a: index,
+                        body_b: ContactBodyIndex::Static(static_index),
+                        point: contact.point,
+                        normal: contact.normal,
+                        penetration: contact.penetration,
+                        correct_position: point_index == 0,
+                    });
+                }
+            },
+        );
     }
 }
 
@@ -240,12 +242,13 @@ mod tests {
     use super::*;
     use crate::UnitVector;
     use crate::body::{BodyId, BodyState, Material};
-    use crate::collider::Circle;
+    use crate::collider::{Circle, CompositeCollider};
     use crate::quantity::{
         Angle, AngularVelocity, Length, LinearAcceleration, LinearVelocity, Mass, Position,
     };
     use crate::transform::Transform;
     use crate::world::{GridBroadPhase, WorldSettings};
+    use alloc::vec;
 
     fn zero_gravity_world() -> World {
         World::new(WorldSettings::new(LinearAcceleration::ZERO))
@@ -365,6 +368,48 @@ mod tests {
         assert_eq!(stats.tested_pairs, 1);
         assert_eq!(stats.aabb_pairs, 1);
         assert_eq!(stats.contacts, 1);
+    }
+
+    #[test]
+    fn composite_body_pair_keeps_contacts_from_separate_parts() {
+        let radius = Length::from_meters(0.5).unwrap();
+        let composite = |y: f64| {
+            CompositeCollider::new(vec![
+                Circle::with_center(Position::from_meters(-1.0, y).unwrap(), radius)
+                    .unwrap()
+                    .into(),
+                Circle::with_center(Position::from_meters(1.0, y).unwrap(), radius)
+                    .unwrap()
+                    .into(),
+            ])
+        };
+        let mut world = zero_gravity_world();
+        world
+            .add_body(Body::dynamic(
+                BodyId::new(1),
+                composite(0.0),
+                Mass::ONE,
+                Material::INELASTIC,
+                BodyState::new(
+                    Transform::IDENTITY,
+                    LinearVelocity::ZERO,
+                    AngularVelocity::ZERO,
+                ),
+            ))
+            .unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::IDENTITY,
+                composite(0.75),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+
+        let stats = world.build_contacts();
+
+        assert_eq!(stats.contacts, 2);
+        assert_eq!(world.contacts().len(), 2);
     }
 
     #[test]
