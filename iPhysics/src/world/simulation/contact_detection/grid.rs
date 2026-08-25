@@ -84,13 +84,13 @@ pub(super) fn detect(
         return;
     };
 
+    debug_assert!(bodies.len() <= u32::MAX as usize);
+
     scratch.column_counts.clear();
     scratch.column_counts.resize(layout.column_count, 0);
     for proxy in proxies {
         for column in layout.first(proxy.aabb)..=layout.last(proxy.aabb) {
-            scratch.column_counts[column] = scratch.column_counts[column]
-                .checked_add(1)
-                .expect("broad-phase column body count exceeds u32");
+            scratch.column_counts[column] = scratch.column_counts[column] + 1;
         }
     }
 
@@ -100,9 +100,7 @@ pub(super) fn detect(
     let mut entry_count = 0_u32;
     for &count in &scratch.column_counts {
         if count >= 2 {
-            entry_count = entry_count
-                .checked_add(count)
-                .expect("broad-phase column entry count exceeds u32");
+            entry_count = entry_count + count;
         }
         scratch.column_offsets.push(entry_count);
     }
