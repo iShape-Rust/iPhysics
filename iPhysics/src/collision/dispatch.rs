@@ -1,24 +1,66 @@
 use super::{ContactManifold, circle_circle, circle_convex, convex_convex};
 use crate::body::BodyId;
-use crate::collider::{Collider, SimpleCollider};
+use crate::collider::{Collider, SimpleCollider, TransformedVertices};
 use crate::transform::Transform;
 
-pub(crate) fn collide(
-    body_a: BodyId,
-    collider_a: &Collider,
-    transform_a: Transform,
-    body_b: BodyId,
-    collider_b: &Collider,
-    transform_b: Transform,
-    mut emit: impl FnMut(ContactManifold),
-) {
-    match (collider_a, collider_b) {
-        (Collider::Composite(a), Collider::Composite(b)) => {
-            for &simple_a in a.simple_colliders() {
-                let aabb_a = simple_a.aabb(transform_a);
-                for &simple_b in b.simple_colliders() {
-                    if aabb_a.intersects(simple_b.aabb(transform_b)) {
-                        collide_simple(
+pub(crate) struct CollisionSolver {
+    a_vertices: TransformedVertices,
+    b_vertices: TransformedVertices,
+}
+
+impl CollisionSolver {
+    #[inline(always)]
+    pub(crate) const fn new() -> Self {
+        Self {
+            a_vertices: TransformedVertices::new(),
+            b_vertices: TransformedVertices::new(),
+        }
+    }
+
+    pub(crate) fn collide(
+        &mut self,
+        body_a: BodyId,
+        collider_a: &Collider,
+        transform_a: Transform,
+        body_b: BodyId,
+        collider_b: &Collider,
+        transform_b: Transform,
+        mut emit: impl FnMut(ContactManifold),
+    ) {
+        if let (Collider::Circle(a), Collider::Circle(b)) = (collider_a, collider_b) {
+            if let Some(contact) =
+                circle_circle::collide_transformed(body_a, *a, transform_a, body_b, *b, transform_b)
+            {
+                emit(ContactManifold::one(contact));
+            }
+            return;
+        }
+
+        match (collider_a, collider_b) {
+            (Collider::Composite(a), Collider::Composite(b)) => {
+                for &simple_a in a.simple_colliders() {
+                    let aabb_a = simple_a.aabb(transform_a);
+                    for &simple_b in b.simple_colliders() {
+                        if aabb_a.intersects(simple_b.aabb(transform_b)) {
+                            self.collide_simple(
+                                body_a,
+                                simple_a,
+                                transform_a,
+                                body_b,
+                                simple_b,
+                                transform_b,
+                                &mut emit,
+                            );
+                        }
+                    }
+                }
+            }
+            (Collider::Composite(a), b) => {
+                let simple_b = Self::as_simple(b);
+                let aabb_b = simple_b.aabb(transform_b);
+                for &simple_a in a.simple_colliders() {
+                    if simple_a.aabb(transform_a).intersects(aabb_b) {
+                        self.collide_simple(
                             body_a,
                             simple_a,
                             transform_a,
@@ -30,93 +72,126 @@ pub(crate) fn collide(
                     }
                 }
             }
-        }
-        (Collider::Composite(a), b) => {
-            let simple_b = as_simple(b);
-            let aabb_b = simple_b.aabb(transform_b);
-            for &simple_a in a.simple_colliders() {
-                if simple_a.aabb(transform_a).intersects(aabb_b) {
-                    collide_simple(
-                        body_a,
-                        simple_a,
-                        transform_a,
-                        body_b,
-                        simple_b,
-                        transform_b,
-                        &mut emit,
-                    );
+            (a, Collider::Composite(b)) => {
+                let simple_a = Self::as_simple(a);
+                let aabb_a = simple_a.aabb(transform_a);
+                for &simple_b in b.simple_colliders() {
+                    if aabb_a.intersects(simple_b.aabb(transform_b)) {
+                        self.collide_simple(
+                            body_a,
+                            simple_a,
+                            transform_a,
+                            body_b,
+                            simple_b,
+                            transform_b,
+                            &mut emit,
+                        );
+                    }
                 }
             }
+            (a, b) => self.collide_simple(
+                body_a,
+                Self::as_simple(a),
+                transform_a,
+                body_b,
+                Self::as_simple(b),
+                transform_b,
+                &mut emit,
+            ),
         }
-        (a, Collider::Composite(b)) => {
-            let simple_a = as_simple(a);
-            let aabb_a = simple_a.aabb(transform_a);
-            for &simple_b in b.simple_colliders() {
-                if aabb_a.intersects(simple_b.aabb(transform_b)) {
-                    collide_simple(
-                        body_a,
-                        simple_a,
-                        transform_a,
-                        body_b,
-                        simple_b,
-                        transform_b,
-                        &mut emit,
-                    );
-                }
+    }
+
+    #[inline(always)]
+    fn as_simple(collider: &Collider) -> SimpleCollider {
+        match collider {
+            Collider::Circle(circle) => SimpleCollider::Circle(*circle),
+            Collider::Convex(convex) => SimpleCollider::Convex(*convex),
+            Collider::Composite(_) => {
+                unreachable!("composites are expanded before primitive dispatch")
             }
         }
-        (a, b) => collide_simple(
-            body_a,
-            as_simple(a),
-            transform_a,
-            body_b,
-            as_simple(b),
-            transform_b,
-            &mut emit,
-        ),
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collide_simple(
+        &mut self,
+        body_a: BodyId,
+        collider_a: SimpleCollider,
+        transform_a: Transform,
+        body_b: BodyId,
+        collider_b: SimpleCollider,
+        transform_b: Transform,
+        emit: &mut impl FnMut(ContactManifold),
+    ) {
+        let manifold = match (collider_a, collider_b) {
+            (SimpleCollider::Circle(a), SimpleCollider::Circle(b)) => {
+                circle_circle::collide_transformed(body_a, a, transform_a, body_b, b, transform_b)
+                    .map(ContactManifold::one)
+            }
+            (SimpleCollider::Circle(circle), SimpleCollider::Convex(convex)) => {
+                circle_convex::collide_with_scratch(
+                    body_a,
+                    circle,
+                    transform_a,
+                    body_b,
+                    convex,
+                    transform_b,
+                    &mut self.a_vertices,
+                )
+                .map(ContactManifold::one)
+            }
+            (SimpleCollider::Convex(convex), SimpleCollider::Circle(circle)) => {
+                circle_convex::collide_with_scratch(
+                    body_b,
+                    circle,
+                    transform_b,
+                    body_a,
+                    convex,
+                    transform_a,
+                    &mut self.a_vertices,
+                )
+                .map(|contact| ContactManifold::one(contact.flipped()))
+            }
+            (SimpleCollider::Convex(a), SimpleCollider::Convex(b)) => {
+                convex_convex::collide_with_scratch(
+                    body_a,
+                    a,
+                    transform_a,
+                    body_b,
+                    b,
+                    transform_b,
+                    &mut self.a_vertices,
+                    &mut self.b_vertices,
+                )
+            }
+        };
+
+        if let Some(manifold) = manifold {
+            emit(manifold);
+        }
     }
 }
 
-#[inline(always)]
-fn as_simple(collider: &Collider) -> SimpleCollider {
-    match collider {
-        Collider::Circle(circle) => SimpleCollider::Circle(*circle),
-        Collider::Convex(convex) => SimpleCollider::Convex(*convex),
-        Collider::Composite(_) => unreachable!("composites are expanded before primitive dispatch"),
-    }
-}
-
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-fn collide_simple(
+fn collide(
     body_a: BodyId,
-    collider_a: SimpleCollider,
+    collider_a: &Collider,
     transform_a: Transform,
     body_b: BodyId,
-    collider_b: SimpleCollider,
+    collider_b: &Collider,
     transform_b: Transform,
-    emit: &mut impl FnMut(ContactManifold),
+    emit: impl FnMut(ContactManifold),
 ) {
-    let manifold = match (collider_a, collider_b) {
-        (SimpleCollider::Circle(a), SimpleCollider::Circle(b)) => {
-            circle_circle::collide_transformed(body_a, a, transform_a, body_b, b, transform_b)
-                .map(ContactManifold::one)
-        }
-        (SimpleCollider::Circle(circle), SimpleCollider::Convex(convex)) => {
-            circle_convex::collide(body_a, circle, transform_a, body_b, convex, transform_b)
-                .map(ContactManifold::one)
-        }
-        (SimpleCollider::Convex(convex), SimpleCollider::Circle(circle)) => {
-            circle_convex::collide(body_b, circle, transform_b, body_a, convex, transform_a)
-                .map(|contact| ContactManifold::one(contact.flipped()))
-        }
-        (SimpleCollider::Convex(a), SimpleCollider::Convex(b)) => {
-            convex_convex::collide(body_a, a, transform_a, body_b, b, transform_b)
-        }
-    };
-
-    if let Some(manifold) = manifold {
-        emit(manifold);
-    }
+    CollisionSolver::new().collide(
+        body_a,
+        collider_a,
+        transform_a,
+        body_b,
+        collider_b,
+        transform_b,
+        emit,
+    );
 }
 
 #[cfg(test)]

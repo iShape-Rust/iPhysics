@@ -4,7 +4,7 @@ mod grid;
 use super::StepStats;
 use super::constraint::{relative_normal_speed, two_bodies_mut};
 use crate::body::{Body, StaticBody};
-use crate::collision::collide;
+use crate::collision::CollisionSolver;
 use crate::geometry::Aabb;
 use crate::world::{ActiveContact, BroadPhase, ContactBodyIndex, World};
 use alloc::vec::Vec;
@@ -51,6 +51,7 @@ impl World {
             active_contacts: &mut self.active_contacts,
             proxies: &scratch.proxies,
             stats: StepStats::default(),
+            collision_solver: CollisionSolver::new(),
         };
 
         let stats = detector.detect(self.settings.broad_phase, &mut scratch.grid);
@@ -65,6 +66,7 @@ struct Detector<'a> {
     active_contacts: &'a mut Vec<ActiveContact>,
     proxies: &'a [AabbProxy],
     stats: StepStats,
+    collision_solver: CollisionSolver,
 }
 
 fn build_proxies(bodies: &[Body], static_bodies: &[StaticBody], proxies: &mut Vec<AabbProxy>) {
@@ -119,7 +121,8 @@ impl Detector<'_> {
                     return;
                 }
                 self.stats.aabb_pairs += 1;
-                collide(
+                let active_contacts = &mut self.active_contacts;
+                self.collision_solver.collide(
                     body_a.id(),
                     body_a.collider(),
                     body_a.state().transform(),
@@ -128,7 +131,7 @@ impl Detector<'_> {
                     body_b.state().transform(),
                     |manifold| {
                         for (point_index, contact) in manifold.into_contacts().enumerate() {
-                            self.active_contacts.push(ActiveContact {
+                            active_contacts.push(ActiveContact {
                                 body_a: index_a,
                                 body_b: ContactBodyIndex::Dynamic(index_b),
                                 point: contact.point,
@@ -169,7 +172,8 @@ impl Detector<'_> {
         self.stats.aabb_pairs += 1;
 
         let static_body = &self.static_bodies[static_index];
-        collide(
+        let active_contacts = &mut self.active_contacts;
+        self.collision_solver.collide(
             body.id(),
             body.collider(),
             body.state().transform(),
@@ -178,7 +182,7 @@ impl Detector<'_> {
             static_body.transform(),
             |manifold| {
                 for (point_index, contact) in manifold.into_contacts().enumerate() {
-                    self.active_contacts.push(ActiveContact {
+                    active_contacts.push(ActiveContact {
                         body_a: index,
                         body_b: ContactBodyIndex::Static(static_index),
                         point: contact.point,

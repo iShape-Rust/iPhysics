@@ -9,6 +9,37 @@ pub struct UnitVector {
     y: i32,
 }
 
+/// Compact Q14 representation used for stored collider normals.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PackedUnitVector {
+    x: i16,
+    y: i16,
+}
+
+impl PackedUnitVector {
+    pub(crate) const X: Self = Self { x: 1 << 14, y: 0 };
+}
+
+impl From<UnitVector> for PackedUnitVector {
+    #[inline(always)]
+    fn from(vector: UnitVector) -> Self {
+        let [x, y] = vector.raw();
+        // Division keeps positive and negative quantization symmetric.
+        Self {
+            x: (x / (1 << 16)) as i16,
+            y: (y / (1 << 16)) as i16,
+        }
+    }
+}
+
+impl From<PackedUnitVector> for UnitVector {
+    #[inline(always)]
+    fn from(vector: PackedUnitVector) -> Self {
+        Self::from_raw(vector.x as i32 * (1 << 16), vector.y as i32 * (1 << 16))
+    }
+}
+
 impl UnitVector {
     pub(crate) const FRACTION_BITS: u32 = 30;
     const MAX_COMPONENT: i32 = 1 << Self::FRACTION_BITS;
@@ -154,5 +185,26 @@ mod tests {
         let direction = UnitVector::normalized(RawVec2::from_i32(-3, -4)).unwrap();
 
         assert_eq!(direction.raw(), [-644_245_094, -858_993_459]);
+    }
+
+    #[test]
+    fn packs_q30_direction_as_q14_without_rounding() {
+        let direction = UnitVector::normalized(RawVec2::from_i32(3, 4)).unwrap();
+        let packed = PackedUnitVector::from(direction);
+
+        assert_eq!(core::mem::size_of::<PackedUnitVector>(), 4);
+        assert_eq!([packed.x, packed.y], [9_830, 13_107]);
+        assert_eq!(UnitVector::from(packed).raw(), [644_218_880, 858_980_352]);
+        assert_eq!(UnitVector::from(PackedUnitVector::X), UnitVector::X);
+    }
+
+    #[test]
+    fn packing_is_symmetric_for_negative_components() {
+        let positive = UnitVector::normalized(RawVec2::from_i32(3, 4)).unwrap();
+        let negative = UnitVector::normalized(RawVec2::from_i32(-3, -4)).unwrap();
+        let positive = PackedUnitVector::from(positive);
+        let negative = PackedUnitVector::from(negative);
+
+        assert_eq!([negative.x, negative.y], [-positive.x, -positive.y]);
     }
 }

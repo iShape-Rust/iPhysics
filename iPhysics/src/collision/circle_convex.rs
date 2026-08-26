@@ -1,10 +1,11 @@
 use super::Contact;
 use crate::body::BodyId;
-use crate::collider::{Circle, Convex};
+use crate::collider::{Circle, Convex, TransformedVertices};
 use crate::geometry::{GeometryPoint, UnitVector};
 use crate::quantity::Length;
 use crate::transform::Transform;
 
+#[cfg(test)]
 pub(super) fn collide(
     circle_body: BodyId,
     circle: Circle,
@@ -13,14 +14,36 @@ pub(super) fn collide(
     convex: Convex,
     convex_transform: Transform,
 ) -> Option<Contact> {
-    let vertices = convex.transformed_vertices(convex_transform);
+    let mut vertices = TransformedVertices::new();
+    collide_with_scratch(
+        circle_body,
+        circle,
+        circle_transform,
+        convex_body,
+        convex,
+        convex_transform,
+        &mut vertices,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn collide_with_scratch(
+    circle_body: BodyId,
+    circle: Circle,
+    circle_transform: Transform,
+    convex_body: BodyId,
+    convex: Convex,
+    convex_transform: Transform,
+    vertices: &mut TransformedVertices,
+) -> Option<Contact> {
+    convex.write_transformed_vertices(convex_transform, vertices);
     let circle_center = circle.transformed_center(circle_transform);
     let radius = circle.radius().raw() as i64;
     let mut best_index = 0;
     let mut best_separation = i64::MIN;
     let mut best_normal = UnitVector::X;
 
-    for (index, normal) in convex.normals().iter().enumerate() {
+    for (index, normal) in convex.normals().enumerate() {
         let normal = normal.rotate(convex_transform.angle);
         let separation = normal.dot(circle_center - vertices[index]);
         if separation > radius {

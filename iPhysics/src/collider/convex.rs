@@ -1,10 +1,40 @@
-use crate::geometry::{Aabb, GeometryPoint, UnitVector};
+use crate::geometry::{Aabb, GeometryPoint, PackedUnitVector, UnitVector};
 use crate::quantity::{Position, RawVec2};
 use crate::transform::Transform;
 
 use super::inertia::from_q24_per_q32_ratio;
 
 pub const MAX_CONVEX_VERTICES: usize = 6;
+
+/// Body-local collider coordinate stored as signed Q5 metres.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PackedPosition {
+    x: i16,
+    y: i16,
+}
+
+impl PackedPosition {
+    const FRACTION_BITS: u32 = 5;
+    const UNPACK_SHIFT: u32 = Position::FRACTION_BITS - Self::FRACTION_BITS;
+
+    #[inline(always)]
+    fn new(position: Position) -> Option<Self> {
+        let [x, y] = position.raw();
+        Some(Self {
+            x: i16::try_from(x / (1 << Self::UNPACK_SHIFT)).ok()?,
+            y: i16::try_from(y / (1 << Self::UNPACK_SHIFT)).ok()?,
+        })
+    }
+
+    #[inline(always)]
+    fn unpack(self) -> Position {
+        Position::from_i32(
+            self.x as i32 * (1 << Self::UNPACK_SHIFT),
+            self.y as i32 * (1 << Self::UNPACK_SHIFT),
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConvexError {
@@ -18,20 +48,23 @@ pub enum ConvexError {
 
 /// Strictly convex polygon with three to six local-space vertices.
 ///
-/// Vertices are canonicalized to counter-clockwise order. Vertices and edge
-/// normals are stored inline; no allocation is required by a dynamic body.
-/// Every vertex must be within `Position::MAX_POS` of the local origin so a
-/// rotated vertex plus any valid body position fits in `GeometryPoint`.
+/// Vertices are quantized to signed Q5 metres and canonicalized to
+/// counter-clockwise order. Vertices and edge normals are stored inline; no
+/// allocation is required by a dynamic body. Local coordinates are limited to
+/// approximately `-1024..1024 m` per component. Quantization truncates toward
+/// zero; construction fails if it merges vertices or makes an edge collinear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Convex {
-    vertices: [Position; MAX_CONVEX_VERTICES],
-    normals: [UnitVector; MAX_CONVEX_VERTICES],
+    vertices: [PackedPosition; MAX_CONVEX_VERTICES],
+    normals: [PackedUnitVector; MAX_CONVEX_VERTICES],
     count: u8,
 }
 
 impl Convex {
     #[inline(always)]
     pub fn new(vertices: &[Position]) -> Result<Self, ConvexError> {
+        let (storage, count) = quantize_vertices(vertices)?;
+        let vertices = &storage[..count];
         let winding = validate_vertices(vertices)?;
         Ok(Self::from_valid_vertices(vertices, winding))
     }
@@ -44,6 +77,9 @@ impl Convex {
     #[cfg(test)]
     #[inline(always)]
     fn new_unchecked(vertices: &[Position]) -> Self {
+        let (storage, count) = quantize_vertices(vertices)
+            .expect("Convex::new_unchecked requires representable vertices");
+        let vertices = &storage[..count];
         debug_assert!(
             validate_vertices(vertices).is_ok(),
             "Convex::new_unchecked requires a valid strict convex"
@@ -71,15 +107,18 @@ impl Convex {
             .expect("a convex always has at least three vertices");
         storage[..count].rotate_left(first);
 
-        let mut normals = [UnitVector::X; MAX_CONVEX_VERTICES];
+        let mut normals = [PackedUnitVector::X; MAX_CONVEX_VERTICES];
         for i in 0..count {
             let [edge_x, edge_y] = (storage[(i + 1) % count] - storage[i]).raw();
             normals[i] = UnitVector::normalized(RawVec2::from_i32(edge_y, -edge_x))
-                .expect("validated convex edges are non-zero");
+                .expect("validated convex edges are non-zero")
+                .into();
         }
 
         Self {
-            vertices: storage,
+            vertices: storage.map(|vertex| {
+                PackedPosition::new(vertex).expect("quantized vertices are representable")
+            }),
             normals,
             count: count as u8,
         }
@@ -96,13 +135,27 @@ impl Convex {
     }
 
     #[inline(always)]
-    pub(crate) fn vertices(&self) -> &[Position] {
-        &self.vertices[..self.count as usize]
+    fn vertices(self) -> LocalVertices {
+        let mut vertices = [Position::ZERO; MAX_CONVEX_VERTICES];
+        for (index, vertex) in self.vertices[..self.count as usize]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            vertices[index] = vertex.unpack();
+        }
+        LocalVertices {
+            vertices,
+            count: self.count,
+        }
     }
 
     #[inline(always)]
-    pub(crate) fn normals(&self) -> &[UnitVector] {
-        &self.normals[..self.count as usize]
+    pub(crate) fn normals(&self) -> impl ExactSizeIterator<Item = UnitVector> + '_ {
+        self.normals[..self.count as usize]
+            .iter()
+            .copied()
+            .map(UnitVector::from)
     }
 
     pub(crate) fn aabb(self, transform: Transform) -> Aabb {
@@ -122,15 +175,23 @@ impl Convex {
     /// Returns derived world-space vertices in the bounded geometry domain.
     /// The constructor's radial invariant makes this transformation exact:
     /// no world-boundary saturation is needed.
+    #[inline(always)]
     pub fn transformed_vertices(self, transform: Transform) -> TransformedVertices {
-        let mut result = TransformedVertices {
-            vertices: [GeometryPoint::ZERO; MAX_CONVEX_VERTICES],
-            count: self.count,
-        };
+        let mut result = TransformedVertices::new();
+        self.write_transformed_vertices(transform, &mut result);
+        result
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_transformed_vertices(
+        self,
+        transform: Transform,
+        result: &mut TransformedVertices,
+    ) {
+        result.count = self.count;
         for (index, vertex) in self.vertices().iter().copied().enumerate() {
             result.vertices[index] = transform.apply_geometry(vertex);
         }
-        result
     }
 
     /// Reciprocal moment of inertia of a uniform polygon about the local
@@ -173,10 +234,34 @@ impl Convex {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LocalVertices {
+    vertices: [Position; MAX_CONVEX_VERTICES],
+    count: u8,
+}
+
+impl core::ops::Deref for LocalVertices {
+    type Target = [Position];
+
+    fn deref(&self) -> &Self::Target {
+        &self.vertices[..self.count as usize]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TransformedVertices {
     vertices: [GeometryPoint; MAX_CONVEX_VERTICES],
     count: u8,
+}
+
+impl TransformedVertices {
+    #[inline(always)]
+    pub(crate) const fn new() -> Self {
+        Self {
+            vertices: [GeometryPoint::ZERO; MAX_CONVEX_VERTICES],
+            count: 0,
+        }
+    }
 }
 
 impl core::ops::Deref for TransformedVertices {
@@ -253,6 +338,25 @@ fn validate_vertices(vertices: &[Position]) -> Result<i8, ConvexError> {
     Ok(winding)
 }
 
+fn quantize_vertices(
+    vertices: &[Position],
+) -> Result<([Position; MAX_CONVEX_VERTICES], usize), ConvexError> {
+    if vertices.len() < 3 {
+        return Err(ConvexError::TooFewVertices);
+    }
+    if vertices.len() > MAX_CONVEX_VERTICES {
+        return Err(ConvexError::TooManyVertices);
+    }
+
+    let mut storage = [Position::ZERO; MAX_CONVEX_VERTICES];
+    for (index, vertex) in vertices.iter().copied().enumerate() {
+        storage[index] = PackedPosition::new(vertex)
+            .ok_or(ConvexError::VertexOutsideLimit)?
+            .unpack();
+    }
+    Ok((storage, vertices.len()))
+}
+
 #[cfg(test)]
 #[inline(always)]
 fn winding_unchecked(vertices: &[Position]) -> i8 {
@@ -265,17 +369,43 @@ mod tests {
     use super::*;
     use crate::quantity::{Angle, Mass};
 
+    const QUANTUM_RAW: i32 = 1 << PackedPosition::UNPACK_SHIFT;
+
+    fn position(x: i32, y: i32) -> Position {
+        Position::from_i32(x * QUANTUM_RAW, y * QUANTUM_RAW)
+    }
+
+    #[test]
+    fn packed_vertices_keep_convex_at_50_bytes() {
+        assert_eq!(core::mem::size_of::<PackedPosition>(), 4);
+        assert_eq!(core::mem::size_of::<Convex>(), 50);
+    }
+
+    #[test]
+    fn packed_vertices_use_symmetric_q5_truncation() {
+        let positive = Position::from_meters(0.05, 0.0).unwrap();
+        let negative = Position::from_meters(-0.05, 0.0).unwrap();
+        let positive = PackedPosition::new(positive).unwrap();
+        let negative = PackedPosition::new(negative).unwrap();
+
+        assert_eq!(positive.x, 1);
+        assert_eq!(negative.x, -1);
+        assert_eq!(positive.unpack().to_meters()[0], 0.03125);
+        assert_eq!(negative.unpack().to_meters()[0], -0.03125);
+    }
+
     #[test]
     fn canonicalizes_clockwise_vertices() {
         let vertices = [
-            Position::from_i32(-10, -10),
-            Position::from_i32(-10, 10),
-            Position::from_i32(10, 10),
-            Position::from_i32(10, -10),
+            position(-10, -10),
+            position(-10, 10),
+            position(10, 10),
+            position(10, -10),
         ];
         let convex = Convex::new(&vertices).unwrap();
 
-        let [a, b, c, ..] = convex.vertices() else {
+        let unpacked = convex.vertices();
+        let [a, b, c, ..] = &*unpacked else {
             unreachable!()
         };
         assert!((*b - *a).cross(*c - *b) > 0);
@@ -287,22 +417,22 @@ mod tests {
     #[should_panic(expected = "Convex::new_unchecked requires a valid strict convex")]
     fn unchecked_constructor_validates_in_debug_builds() {
         let _ = Convex::new_unchecked(&[
-            Position::from_i32(0, 0),
-            Position::from_i32(10, 0),
-            Position::from_i32(5, 5),
-            Position::from_i32(10, 10),
-            Position::from_i32(0, 10),
+            position(0, 0),
+            position(10, 0),
+            position(5, 5),
+            position(10, 10),
+            position(0, 10),
         ]);
     }
 
     #[test]
     fn rejects_concave_polygon() {
         let result = Convex::new(&[
-            Position::from_i32(0, 0),
-            Position::from_i32(10, 0),
-            Position::from_i32(5, 5),
-            Position::from_i32(10, 10),
-            Position::from_i32(0, 10),
+            position(0, 0),
+            position(10, 0),
+            position(5, 5),
+            position(10, 10),
+            position(0, 10),
         ]);
 
         assert_eq!(result, Err(ConvexError::NotConvex));
@@ -311,17 +441,17 @@ mod tests {
     #[test]
     fn cyclic_permutations_have_identical_storage() {
         let a = Convex::new(&[
-            Position::from_i32(-10, -10),
-            Position::from_i32(10, -10),
-            Position::from_i32(10, 10),
-            Position::from_i32(-10, 10),
+            position(-10, -10),
+            position(10, -10),
+            position(10, 10),
+            position(-10, 10),
         ])
         .unwrap();
         let b = Convex::new(&[
-            Position::from_i32(10, 10),
-            Position::from_i32(-10, 10),
-            Position::from_i32(-10, -10),
-            Position::from_i32(10, -10),
+            position(10, 10),
+            position(-10, 10),
+            position(-10, -10),
+            position(10, -10),
         ])
         .unwrap();
 
@@ -331,11 +461,11 @@ mod tests {
     #[test]
     fn rejects_self_intersecting_order() {
         let result = Convex::new(&[
-            Position::from_i32(0, 10),
-            Position::from_i32(6, -8),
-            Position::from_i32(-10, 3),
-            Position::from_i32(10, 3),
-            Position::from_i32(-6, -8),
+            position(0, 10),
+            position(6, -8),
+            position(-10, 3),
+            position(10, 3),
+            position(-6, -8),
         ]);
 
         assert_eq!(result, Err(ConvexError::NotConvex));
@@ -344,66 +474,65 @@ mod tests {
     #[test]
     fn rotated_aabb_is_deterministic() {
         let convex = Convex::new(&[
-            Position::from_i32(-20, -10),
-            Position::from_i32(20, -10),
-            Position::from_i32(20, 10),
-            Position::from_i32(-20, 10),
+            position(-20, -10),
+            position(20, -10),
+            position(20, 10),
+            position(-20, 10),
         ])
         .unwrap();
         let aabb = convex.aabb(Transform::new(Position::ZERO, Angle::QUARTER_TURN));
 
-        assert_eq!(aabb.min().raw(), [-10, -20]);
-        assert_eq!(aabb.max().raw(), [10, 20]);
+        assert_eq!(aabb.min().raw(), [-10 * QUANTUM_RAW, -20 * QUANTUM_RAW]);
+        assert_eq!(aabb.max().raw(), [10 * QUANTUM_RAW, 20 * QUANTUM_RAW]);
     }
 
     #[test]
-    fn vertices_must_fit_local_radius_limit() {
-        let max = Position::MAX_POSITION;
+    fn vertices_must_fit_packed_coordinate_limit() {
+        let outside = (i16::MAX as i32 + 1) * QUANTUM_RAW;
         assert_eq!(
             Convex::new(&[
-                Position::from_i32(max, max),
-                Position::from_i32(0, 1),
-                Position::from_i32(1, 0),
+                Position::from_i32(outside, 0),
+                position(0, 1),
+                position(1, 0),
             ]),
             Err(ConvexError::VertexOutsideLimit)
         );
 
-        assert!(
-            Convex::new(&[
-                Position::from_i32(max, 0),
-                Position::from_i32(0, 1),
-                Position::from_i32(0, -1),
-            ])
-            .is_ok()
-        );
+        let max = i16::MAX as i32;
+        assert!(Convex::new(&[position(max, 0), position(0, 1), position(0, -1),]).is_ok());
     }
 
     #[test]
     fn aabb_can_extend_beyond_position_range() {
-        let max = Position::MAX_POSITION;
+        let world_max = Position::MAX_POSITION;
+        let local_max = i16::MAX as i32 * QUANTUM_RAW;
         let convex = Convex::new(&[
-            Position::from_i32(max, 0),
-            Position::from_i32(0, 1),
-            Position::from_i32(0, -1),
+            Position::from_i32(local_max, 0),
+            position(0, 1),
+            position(0, -1),
         ])
         .unwrap();
-        let aabb = convex.aabb(Transform::new(Position::from_i32(max, max), Angle::ZERO));
+        let aabb = convex.aabb(Transform::new(
+            Position::from_i32(world_max, world_max),
+            Angle::ZERO,
+        ));
 
-        assert_eq!(aabb.max().raw()[0], 2 * Position::MAX_POSITION);
+        assert_eq!(aabb.max().raw()[0], world_max + local_max);
         assert!(aabb.max().raw()[0] > Position::MAX_POSITION);
     }
 
     #[test]
     fn radial_limit_survives_non_cardinal_rotation_at_world_edge() {
-        let max = Position::MAX_POSITION;
+        let world_max = Position::MAX_POSITION;
+        let local_max = i16::MAX as i32 * QUANTUM_RAW;
         let convex = Convex::new(&[
-            Position::from_i32(max, 0),
-            Position::from_i32(0, 1),
-            Position::from_i32(0, -1),
+            Position::from_i32(local_max, 0),
+            position(0, 1),
+            position(0, -1),
         ])
         .unwrap();
         let vertices = convex.transformed_vertices(Transform::new(
-            Position::from_i32(max, max),
+            Position::from_i32(world_max, world_max),
             Angle::from_raw(0x1234_5678),
         ));
 

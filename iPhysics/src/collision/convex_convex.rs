@@ -1,6 +1,6 @@
 use super::{Contact, ContactManifold};
 use crate::body::BodyId;
-use crate::collider::Convex;
+use crate::collider::{Convex, TransformedVertices};
 use crate::geometry::{GeometryPoint, UnitVector};
 use crate::ops::div::DivRound;
 use crate::quantity::{Angle, Length};
@@ -15,6 +15,7 @@ enum AxisSource {
 type BestAxis = Option<(u32, UnitVector, AxisSource)>;
 const MANIFOLD_SLOP_RAW: i64 = 64; // 1/1024 m in Q16
 
+#[cfg(test)]
 pub(super) fn collide(
     body_a: BodyId,
     convex_a: Convex,
@@ -23,8 +24,33 @@ pub(super) fn collide(
     convex_b: Convex,
     transform_b: Transform,
 ) -> Option<ContactManifold> {
-    let vertices_a = convex_a.transformed_vertices(transform_a);
-    let vertices_b = convex_b.transformed_vertices(transform_b);
+    let mut vertices_a = TransformedVertices::new();
+    let mut vertices_b = TransformedVertices::new();
+    collide_with_scratch(
+        body_a,
+        convex_a,
+        transform_a,
+        body_b,
+        convex_b,
+        transform_b,
+        &mut vertices_a,
+        &mut vertices_b,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn collide_with_scratch(
+    body_a: BodyId,
+    convex_a: Convex,
+    transform_a: Transform,
+    body_b: BodyId,
+    convex_b: Convex,
+    transform_b: Transform,
+    vertices_a: &mut TransformedVertices,
+    vertices_b: &mut TransformedVertices,
+) -> Option<ContactManifold> {
+    convex_a.write_transformed_vertices(transform_a, vertices_a);
+    convex_b.write_transformed_vertices(transform_b, vertices_b);
     let mut best: BestAxis = None;
 
     for normal in convex_a.normals() {
@@ -32,8 +58,8 @@ pub(super) fn collide(
             &mut best,
             normal.rotate(transform_a.angle),
             AxisSource::A,
-            &vertices_a,
-            &vertices_b,
+            vertices_a,
+            vertices_b,
         )?;
     }
     for normal in convex_b.normals() {
@@ -41,8 +67,8 @@ pub(super) fn collide(
             &mut best,
             normal.rotate(transform_b.angle),
             AxisSource::B,
-            &vertices_a,
-            &vertices_b,
+            vertices_a,
+            vertices_b,
         )?;
     }
 
@@ -197,7 +223,7 @@ struct ContactCandidate {
 
 fn supporting_edge(
     vertices: &[GeometryPoint],
-    normals: &[UnitVector],
+    normals: impl Iterator<Item = UnitVector>,
     angle: Angle,
     reference_outward: UnitVector,
     most_aligned: bool,
@@ -207,9 +233,11 @@ fn supporting_edge(
         let [bx, by] = normal.rotate(angle).raw();
         ax as i64 * bx as i64 + ay as i64 * by as i64
     };
+    let mut normals = normals.enumerate();
+    let (_, first) = normals.next().expect("a convex has at least three edges");
     let mut edge = 0;
-    let mut best = score(normals[0]);
-    for (index, &normal) in normals.iter().enumerate().skip(1) {
+    let mut best = score(first);
+    for (index, normal) in normals {
         let candidate = score(normal);
         if (most_aligned && candidate > best) || (!most_aligned && candidate < best) {
             edge = index;
