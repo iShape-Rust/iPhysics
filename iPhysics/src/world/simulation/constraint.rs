@@ -104,8 +104,7 @@ pub(super) fn add_velocity(body: &mut Body, dx: i64, dy: i64) {
 
 pub(super) fn add_angular_velocity(body: &mut Body, delta: i64) {
     let raw = (body.state().angular_velocity().raw() as i64).saturating_add(delta);
-    let raw = raw.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-    body.state_mut().angular_velocity = AngularVelocity::from_raw(raw);
+    body.state_mut().angular_velocity = AngularVelocity::from_wide_saturated(raw);
 }
 
 pub(super) fn add_position(body: &mut Body, dx: i64, dy: i64) {
@@ -144,8 +143,8 @@ pub(super) fn apply_body_impulse(
     let angular_product = impulse_q10.unsigned_abs() as u128
         * body.inverse_inertia_q40() as u128
         * lever_q16.unsigned_abs() as u128;
-    let angular_magnitude = (angular_product + (1_u128 << 41)) >> 42;
-    let angular_magnitude = angular_magnitude.min(i64::MAX as u128) as i64;
+    let angular_magnitude = (angular_product + (1_u128 << 49)) >> 50;
+    let angular_magnitude = angular_magnitude.min(AngularVelocity::MAX_CHANGE as u128) as i64;
     let angular_change = if negative_angular {
         -angular_magnitude
     } else {

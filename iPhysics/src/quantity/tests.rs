@@ -161,7 +161,7 @@ fn angular_point_speed_extremes_stay_in_i32() {
 
     assert_eq!(
         AngularVelocity::from_raw(i32::MAX).projected_point_speed_raw(max_lever_q16),
-        i32::MAX
+        AngularVelocity::MAX_VELOCITY << 8
     );
     assert_eq!(
         AngularVelocity::from_raw(i32::MIN).projected_point_speed_raw(max_lever_q16),
@@ -178,21 +178,21 @@ fn angular_acceleration_uses_full_q24_range() {
 }
 
 #[test]
-fn angular_velocity_uses_full_q24_range() {
+fn angular_velocity_enforces_bounded_q16_range() {
     let min = AngularVelocity::from_raw(i32::MIN);
     let max = AngularVelocity::from_raw(i32::MAX);
 
-    assert_eq!(min.raw(), i32::MIN);
-    assert_eq!(max.raw(), i32::MAX);
+    assert_eq!(min.raw(), AngularVelocity::MIN_VELOCITY);
+    assert_eq!(max.raw(), AngularVelocity::MAX_VELOCITY);
     assert!(AngularVelocity::from_radians_per_second(-128.0).is_some());
     assert!(AngularVelocity::from_radians_per_second(128.0).is_none());
     assert_eq!(
         min.advance(AngularAcceleration::from_raw(i32::MIN)).raw(),
-        i32::MIN
+        AngularVelocity::MIN_VELOCITY
     );
     assert_eq!(
         max.advance(AngularAcceleration::from_raw(i32::MAX)).raw(),
-        i32::MAX
+        AngularVelocity::MAX_VELOCITY
     );
 }
 

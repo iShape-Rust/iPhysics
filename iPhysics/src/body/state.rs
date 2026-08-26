@@ -16,7 +16,7 @@ impl SleepConfig {
     /// `0.05 m/s`, `0.1 rad/s`, and 16 ticks (`0.25 s` at 64 Hz).
     pub const FAST_EFFECTS: Self = Self {
         linear_speed_raw: 51,
-        angular_speed_raw: 1_677_722,
+        angular_speed_raw: 6_554,
         required_ticks: 16,
     };
 

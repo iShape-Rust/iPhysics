@@ -159,10 +159,16 @@ impl Convex {
     }
 
     pub(crate) fn aabb(self, transform: Transform) -> Aabb {
-        let vertices = self.transformed_vertices(transform);
-        let mut min = vertices[0];
-        let mut max = vertices[0];
-        for point in &vertices[1..] {
+        let mut vertices = self.vertices[..self.count as usize]
+            .iter()
+            .copied()
+            .map(|vertex| transform.apply_geometry(vertex.unpack()));
+        let first = vertices
+            .next()
+            .expect("a convex always has at least three vertices");
+        let mut min = first;
+        let mut max = first;
+        for point in vertices {
             let [x, y] = point.raw();
             let [min_x, min_y] = min.raw();
             let [max_x, max_y] = max.raw();

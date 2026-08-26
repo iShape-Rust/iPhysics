@@ -2,9 +2,9 @@ use super::constraint::{
     MAX_RELATIVE_CONTACT_SPEED_RAW, add_angular_velocity, add_position, add_velocity,
     contact_inverse_mass_q24, contact_lever_cross_axis, relative_speed_along, two_bodies_mut,
 };
-use crate::UnitVector;
 use crate::body::Body;
 use crate::world::{ActiveContact, ContactBodyIndex, World};
+use crate::{AngularVelocity, UnitVector};
 
 const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
@@ -213,7 +213,7 @@ fn apply_contact_impulse(
     let inverse_inertia_a = a.inverse_inertia_q40();
     let inverse_inertia_b = b.as_deref().map(Body::inverse_inertia_q40).unwrap_or(0);
 
-    let change_a = div_round_u128(magnitude as u128 * inverse_a as u128, inverse_sum_q24);
+    let change_a = div_round(magnitude * inverse_a, inverse_sum_q24);
     if change_a != 0 {
         let [change_x, change_y] = axis.scaled_wide_raw(change_a);
         add_velocity(a, -change_x, -change_y);
@@ -223,7 +223,7 @@ fn apply_contact_impulse(
     add_angular_velocity(a, -angular_change_a);
 
     if let Some(body) = b {
-        let change_b = div_round_u128(magnitude as u128 * inverse_b as u128, inverse_sum_q24);
+        let change_b = div_round(magnitude * inverse_b, inverse_sum_q24);
         if change_b != 0 {
             let [change_x, change_y] = axis.scaled_wide_raw(change_b);
             add_velocity(body, change_x, change_y);
@@ -259,13 +259,13 @@ fn angular_velocity_change_raw(
         return 0;
     }
 
-    // Q10 * Q40 * Q16 / Q24 -> Q42; the extra shift yields angular Q24.
+    // Q10 * Q40 * Q16 / Q24 -> Q42; the extra shift yields angular Q16.
     let numerator = velocity_change_q10 as u128
         * inverse_inertia_q40 as u128
         * lever_q16.unsigned_abs() as u128;
-    let denominator = (inverse_sum_q24 as u128) << 18;
-    let magnitude = (numerator + (denominator >> 1)) / denominator;
-    let magnitude = magnitude.min(i64::MAX as u128) as i64;
+    let denominator = (inverse_sum_q24 as u128) << 26;
+    let magnitude = div_round_scaled_u128(numerator, denominator, AngularVelocity::MAX_CHANGE);
+    let magnitude = magnitude as i64;
     if lever_q16 < 0 { -magnitude } else { magnitude }
 }
 
@@ -289,16 +289,33 @@ fn round_shift(value: u64, shift: u32) -> u64 {
 #[inline(always)]
 fn div_round(numerator: u64, denominator: u64) -> u64 {
     debug_assert!(denominator > 0);
-    debug_assert!(numerator <= u64::MAX - (denominator >> 1));
-    (numerator + (denominator >> 1)) / denominator
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    quotient + u64::from(remainder >= denominator - remainder)
 }
 
 #[inline(always)]
-fn div_round_u128(numerator: u128, denominator: u64) -> u64 {
+fn div_round_scaled_u128(numerator: u128, denominator: u128, limit: u64) -> u64 {
     debug_assert!(denominator > 0);
-    let denominator = denominator as u128;
-    let result = (numerator + (denominator >> 1)) / denominator;
-    result.min(u64::MAX as u128) as u64
+    debug_assert!(limit > 0);
+    if numerator == 0 {
+        return 0;
+    }
+    if numerator >= denominator * limit as u128 {
+        return limit;
+    }
+
+    // A non-saturating result is below the 24-bit angular-velocity span.
+    // Shifting both operands to at most 63 bits therefore leaves at least
+    // 39 significant denominator bits before the native u64 division.
+    let numerator_bits = u128::BITS - numerator.leading_zeros();
+    let denominator_bits = u128::BITS - denominator.leading_zeros();
+    let shift = numerator_bits.max(denominator_bits).saturating_sub(63);
+    let scaled_numerator = (numerator >> shift) as u64;
+    let scaled_denominator = (denominator >> shift) as u64;
+    debug_assert!(scaled_denominator > 0);
+
+    div_round(scaled_numerator, scaled_denominator).min(limit)
 }
 
 #[cfg(test)]
@@ -389,6 +406,41 @@ mod tests {
         assert_eq!(impulse, MAX_VELOCITY_CHANGE_RAW);
         assert!(impulse <= u32::MAX as u64);
         assert_eq!(div_round(impulse * inverse_mass, inverse_sum), impulse / 2);
+    }
+
+    #[test]
+    fn scaled_angular_division_tracks_full_width_reference() {
+        let velocity_changes = [1, 17, 1 << 10, 1 << 20, MAX_VELOCITY_CHANGE_RAW];
+        let inverse_inertias = [1, 1 << 24, 1 << 40, 6 << 40, u64::MAX];
+        let levers = [1_u64, 1 << 11, 1 << 16, 1 << 26, 1 << 31];
+        let inverse_sums = [1, 1 << 16, 1 << 24, 1 << 32, 1 << 48, u64::MAX];
+
+        for velocity_change in velocity_changes {
+            for inverse_inertia in inverse_inertias {
+                for lever in levers {
+                    for inverse_sum in inverse_sums {
+                        let numerator = velocity_change as u128
+                            * inverse_inertia as u128
+                            * lever as u128;
+                        let denominator = (inverse_sum as u128) << 26;
+                        let expected = ((numerator + (denominator >> 1)) / denominator)
+                            .min(AngularVelocity::MAX_CHANGE as u128)
+                            as u64;
+                        let actual = div_round_scaled_u128(
+                            numerator,
+                            denominator,
+                            AngularVelocity::MAX_CHANGE,
+                        );
+
+                        assert!(
+                            actual.abs_diff(expected) <= 1,
+                            "expected {expected}, got {actual} for {velocity_change}, \
+                             {inverse_inertia}, {lever}, {inverse_sum}",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
