@@ -1,17 +1,16 @@
 use super::constraint::{
     add_angular_velocity, add_position, add_velocity, contact_inverse_mass_q24,
-    contact_lever_cross_axis, relative_speed_along_levers, two_bodies_mut,
-    MAX_RELATIVE_CONTACT_SPEED_RAW,
+    contact_lever_cross_axis, point_speed_along, relative_speed_along_levers, round_shift_signed,
+    two_bodies_mut, MAX_RELATIVE_CONTACT_SPEED_RAW,
 };
 use crate::body::Body;
 use crate::world::contact_cache::{ContactIdentity, HotContact, HotContacts};
 use crate::world::{ActiveContact, ContactBodyIndex, World};
-use crate::{AngularVelocity, UnitVector};
+use crate::{AngularVelocity, LinearVelocity, UnitVector};
 use alloc::vec::Vec;
 
 const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
-const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
-const POSITION_PARENT_SCALE_Q30: u64 = 1 << 28; // 0.25
+const MAX_POSITION_CORRECTION_RAW: u32 = 256;
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 const MAX_ACCUMULATED_NORMAL_RAW: u64 = (u8::MAX as u64 + 1) * MAX_VELOCITY_CHANGE_RAW;
 const ANGULAR_RESPONSE_FRACTION_BITS: u32 = 17;
@@ -25,11 +24,9 @@ const MAX_TANGENT_ACCUMULATOR_RAW: u64 =
     (u8::MAX as u64 + 1) * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 const MAX_FRICTION_RESPONSE_Q31: u64 =
     MAX_TANGENT_ACCUMULATOR_RAW << FRICTION_RESPONSE_FRACTION_BITS;
-const SUPPORT_ALIGNMENT_MIN_Q30: i64 = 1 << 28; // 0.25
-const SUPPORT_SCALE_Q30: u64 = 1 << 30;
-const SHOCK_STRENGTH_Q30: u64 = 1 << 30; // 1.0
-const ANGULAR_SUPPORT_ROOT_Q30: u32 = 1 << 28; // 0.25
-const ANGULAR_SUPPORT_PROPAGATION_Q30: u32 = 3 << 28; // 0.75
+const DEFERRED_CONTACT_SPEED_SLOP_RAW: i32 = 8;
+const DEFERRED_CONTACT_RETENTION_Q16: i64 = 7 << 13; // 0.875
+const BLOCKED_VELOCITY_RETENTION_Q16: i64 = 7 << 13; // 0.875
 
 #[derive(Debug, Clone, Copy, Default)]
 struct AxisConstraint {
@@ -47,63 +44,16 @@ pub(super) struct ContactConstraint {
     // These are impulse numerators: dividing each by the corresponding Q24
     // effective inverse mass yields the scalar contact impulse. Keeping Q10
     // numerators avoids introducing another stored fixed-point format.
-    normal_velocity_change_q10: u64,
+    normal_velocity_change_q10: u32,
     tangent_velocity_change_q10: i64,
     normal_target_speed_q10: u32,
     normal: AxisConstraint,
     tangent: AxisConstraint,
     friction_response_q31: u64,
     restitution_q16: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SupportState {
-    depth: u16,
-    axis: Option<UnitVector>,
-    root_score: i64,
-}
-
-impl Default for SupportState {
-    fn default() -> Self {
-        Self {
-            depth: u16::MAX,
-            axis: None,
-            root_score: i64::MIN,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ShockParent {
-    Static,
-    BodyA,
-    BodyB,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ShockConstraint {
-    contact_index: usize,
-    depth: u16,
-    normal: AxisConstraint,
-}
-
-#[derive(Debug, Default)]
-pub(super) struct ShockSet {
-    constraints: Vec<ShockConstraint>,
-    angular_support_q30: Vec<u32>,
-    position_parents: Vec<Option<ShockParent>>,
-}
-
-impl ShockSet {
-    #[inline(always)]
-    pub(super) fn is_empty(&self) -> bool {
-        self.constraints.is_empty()
-    }
-
-    #[inline(always)]
-    pub(super) fn len(&self) -> usize {
-        self.constraints.len()
-    }
+    // Body-owned deferred impulse transferred through this contact. It is
+    // local to the current solve and is deliberately not warm-started.
+    deferred_normal_velocity_change_q10: u32,
 }
 
 pub(super) fn prepare_constraints(world: &World) -> Vec<ContactConstraint> {
@@ -143,399 +93,6 @@ pub(super) fn prepare_constraints(world: &World) -> Vec<ContactConstraint> {
             }
         })
         .collect()
-}
-
-pub(super) fn prepare_shock_constraints(
-    world: &World,
-    regular: &[ContactConstraint],
-) -> ShockSet {
-    debug_assert_eq!(regular.len(), world.active_contacts.len());
-    let mut result = ShockSet {
-        constraints: Vec::new(),
-        angular_support_q30: alloc::vec![0; world.bodies.len()],
-        position_parents: alloc::vec![None; world.active_contacts.len()],
-    };
-    if world.settings.gravity.is_zero() || world.active_contacts.is_empty() {
-        return result;
-    }
-
-    // Build the current contact graph once, then run a multi-source BFS from
-    // every static (or still-sleeping) support. The propagated axis is the
-    // normal of the root support, not the normals of intermediate contacts.
-    let mut incident = alloc::vec![Vec::new(); world.bodies.len()];
-    let mut support = alloc::vec![SupportState::default(); world.bodies.len()];
-    let gravity = world.settings.gravity.raw();
-    for (contact_index, contact) in world.active_contacts.iter().copied().enumerate() {
-        incident[contact.body_a].push(contact_index);
-        match contact.body_b {
-            ContactBodyIndex::Static(_) => {
-                seed_support(&mut support[contact.body_a], -contact.normal, gravity);
-            }
-            ContactBodyIndex::Dynamic(index_b) => {
-                incident[index_b].push(contact_index);
-                let sleeping_a = world.bodies[contact.body_a].state().is_sleeping();
-                let sleeping_b = world.bodies[index_b].state().is_sleeping();
-                if sleeping_a && !sleeping_b {
-                    seed_support(&mut support[index_b], contact.normal, gravity);
-                } else if sleeping_b && !sleeping_a {
-                    seed_support(&mut support[contact.body_a], -contact.normal, gravity);
-                }
-            }
-        }
-    }
-
-    let mut queue = Vec::new();
-    for (body_index, state) in support.iter().enumerate() {
-        if state.depth == 0 {
-            queue.push(body_index);
-        }
-    }
-    let mut head = 0;
-    while head < queue.len() {
-        let parent_index = queue[head];
-        head += 1;
-        let parent = support[parent_index];
-        let Some(parent_axis) = parent.axis else {
-            continue;
-        };
-        for &contact_index in &incident[parent_index] {
-            let contact = world.active_contacts[contact_index];
-            let ContactBodyIndex::Dynamic(index_b) = contact.body_b else {
-                continue;
-            };
-            let (child_index, normal_on_child) = if contact.body_a == parent_index {
-                (index_b, contact.normal)
-            } else {
-                (contact.body_a, -contact.normal)
-            };
-            if world.bodies[child_index].state().is_sleeping()
-                || axis_dot_q30(normal_on_child, parent_axis) < SUPPORT_ALIGNMENT_MIN_Q30
-            {
-                continue;
-            }
-            let child_depth = parent.depth.saturating_add(1);
-            if child_depth < support[child_index].depth
-                || (child_depth == support[child_index].depth
-                    && parent.root_score > support[child_index].root_score)
-            {
-                support[child_index].depth = child_depth;
-                support[child_index].axis = Some(parent_axis);
-                support[child_index].root_score = parent.root_score;
-                queue.push(child_index);
-            }
-        }
-    }
-
-    result.angular_support_q30 = prepare_angular_support(world, regular, &support, &incident);
-
-    for (contact_index, contact) in world.active_contacts.iter().copied().enumerate() {
-        if regular[contact_index].normal_target_speed_q10 != 0 {
-            continue;
-        }
-        let Some((parent, parent_axis, normal_on_child, depth)) =
-            shock_parent(world, contact, &support)
-        else {
-            continue;
-        };
-        let alignment_q30 = axis_dot_q30(normal_on_child, parent_axis);
-        if alignment_q30 < SUPPORT_ALIGNMENT_MIN_Q30 {
-            continue;
-        }
-        let normal = match parent {
-            ShockParent::Static => regular[contact_index].normal,
-            ShockParent::BodyA | ShockParent::BodyB => prepare_shock_axis_constraint(
-                world,
-                contact,
-                regular[contact_index].normal,
-                parent,
-                alignment_q30 as u32,
-            ),
-        };
-        if normal.inverse_sum_q24 == 0 {
-            continue;
-        }
-        let child_index = match (parent, contact.body_b) {
-            (ShockParent::Static, _) => contact.body_a,
-            (ShockParent::BodyA, ContactBodyIndex::Dynamic(index_b)) => index_b,
-            (ShockParent::BodyB, ContactBodyIndex::Dynamic(_)) => contact.body_a,
-            _ => continue,
-        };
-        if result.angular_support_q30[child_index] != 0 {
-            result.position_parents[contact_index] = Some(parent);
-        }
-        result.constraints.push(ShockConstraint {
-            contact_index,
-            depth,
-            normal,
-        });
-    }
-    result
-        .constraints
-        .sort_unstable_by_key(|constraint| (constraint.depth, constraint.contact_index));
-    result
-}
-
-fn seed_support(state: &mut SupportState, axis: UnitVector, gravity: [i32; 2]) {
-    let [axis_x, axis_y] = axis.raw();
-    let score = -(axis_x as i64 * gravity[0] as i64 + axis_y as i64 * gravity[1] as i64);
-    if state.depth != 0 || score > state.root_score {
-        state.depth = 0;
-        state.axis = Some(axis);
-        state.root_score = score;
-    }
-}
-
-fn shock_parent(
-    world: &World,
-    contact: ActiveContact,
-    support: &[SupportState],
-) -> Option<(ShockParent, UnitVector, UnitVector, u16)> {
-    match contact.body_b {
-        ContactBodyIndex::Static(_) => {
-            let state = support[contact.body_a];
-            Some((ShockParent::Static, state.axis?, -contact.normal, 0))
-        }
-        ContactBodyIndex::Dynamic(index_b) => {
-            let state_a = support[contact.body_a];
-            let state_b = support[index_b];
-            let sleeping_a = world.bodies[contact.body_a].state().is_sleeping();
-            let sleeping_b = world.bodies[index_b].state().is_sleeping();
-            if sleeping_a && !sleeping_b {
-                return Some((ShockParent::BodyA, state_b.axis?, contact.normal, 0));
-            }
-            if sleeping_b && !sleeping_a {
-                return Some((ShockParent::BodyB, state_a.axis?, -contact.normal, 0));
-            }
-            if state_a.depth < state_b.depth {
-                Some((
-                    ShockParent::BodyA,
-                    state_a.axis?,
-                    contact.normal,
-                    state_b.depth,
-                ))
-            } else if state_b.depth < state_a.depth {
-                Some((
-                    ShockParent::BodyB,
-                    state_b.axis?,
-                    -contact.normal,
-                    state_a.depth,
-                ))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-fn prepare_angular_support(
-    world: &World,
-    regular: &[ContactConstraint],
-    support: &[SupportState],
-    incident: &[Vec<usize>],
-) -> Vec<u32> {
-    let mut angular_support = world
-        .bodies
-        .iter()
-        .map(|body| {
-            if body.state().is_sleeping() {
-                SUPPORT_SCALE_Q30 as u32
-            } else {
-                0
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut order = support
-        .iter()
-        .enumerate()
-        .filter_map(|(body_index, state)| {
-            (state.depth != u16::MAX).then_some((state.depth, body_index))
-        })
-        .collect::<Vec<_>>();
-    order.sort_unstable();
-
-    for (_, body_index) in order {
-        if world.bodies[body_index].state().is_sleeping() {
-            continue;
-        }
-        let Some(support_axis) = support[body_index].axis else {
-            continue;
-        };
-        let mut negative_strength = 0;
-        let mut positive_strength = 0;
-        for &contact_index in &incident[body_index] {
-            if regular[contact_index].normal_target_speed_q10 != 0 {
-                continue;
-            }
-            let contact = world.active_contacts[contact_index];
-            let Some((parent, _, normal_on_child, _)) =
-                shock_parent(world, contact, support)
-            else {
-                continue;
-            };
-            let child_index = match (parent, contact.body_b) {
-                (ShockParent::Static, _) => contact.body_a,
-                (ShockParent::BodyA, ContactBodyIndex::Dynamic(index_b)) => index_b,
-                (ShockParent::BodyB, ContactBodyIndex::Dynamic(_)) => contact.body_a,
-                _ => continue,
-            };
-            if child_index != body_index {
-                continue;
-            }
-            let alignment_q30 = axis_dot_q30(normal_on_child, support_axis);
-            if alignment_q30 < SUPPORT_ALIGNMENT_MIN_Q30 {
-                continue;
-            }
-            let (parent_strength, propagate) = match parent {
-                ShockParent::Static => (ANGULAR_SUPPORT_ROOT_Q30, false),
-                ShockParent::BodyA => {
-                    let parent_index = contact.body_a;
-                    (
-                        angular_support[parent_index],
-                        !world.bodies[parent_index].state().is_sleeping(),
-                    )
-                }
-                ShockParent::BodyB => {
-                    let ContactBodyIndex::Dynamic(parent_index) = contact.body_b else {
-                        continue;
-                    };
-                    (
-                        angular_support[parent_index],
-                        !world.bodies[parent_index].state().is_sleeping(),
-                    )
-                }
-            };
-            if parent_strength == 0 {
-                continue;
-            }
-            let alignment_squared_q30 = square_q30(alignment_q30 as u32);
-            let mut strength = multiply_q30(parent_strength, alignment_squared_q30);
-            if propagate {
-                strength = multiply_q30(strength, ANGULAR_SUPPORT_PROPAGATION_Q30);
-            }
-            let tangent_offset_q16 =
-                contact_lever_cross_axis(&world.bodies[body_index], contact.point, support_axis);
-            if tangent_offset_q16 <= -(POSITION_SLOP_RAW as i32) {
-                negative_strength = negative_strength.max(strength);
-            } else if tangent_offset_q16 >= POSITION_SLOP_RAW as i32 {
-                positive_strength = positive_strength.max(strength);
-            }
-        }
-        angular_support[body_index] = negative_strength.min(positive_strength);
-    }
-
-    angular_support
-}
-
-fn prepare_shock_axis_constraint(
-    world: &World,
-    contact: ActiveContact,
-    regular: AxisConstraint,
-    parent: ShockParent,
-    alignment_q30: u32,
-) -> AxisConstraint {
-    let a = &world.bodies[contact.body_a];
-    let b = match contact.body_b {
-        ContactBodyIndex::Dynamic(index_b) => Some(&world.bodies[index_b]),
-        ContactBodyIndex::Static(_) => None,
-    };
-    let alignment_squared_q30 = square_q30(alignment_q30) as u64;
-    let shock_q30 =
-        (alignment_squared_q30 * SHOCK_STRENGTH_Q30 + (1 << 29)) >> 30;
-    let retention_q30 = SUPPORT_SCALE_Q30 - shock_q30;
-    // Only the parent becomes heavier. With a fully aligned support normal its
-    // inverse mass and inertia reach zero, so the correction travels upward.
-    let scale_a = if matches!(parent, ShockParent::BodyA) {
-        retention_q30
-    } else {
-        SUPPORT_SCALE_Q30
-    };
-    let scale_b = if matches!(parent, ShockParent::BodyB) {
-        retention_q30
-    } else {
-        SUPPORT_SCALE_Q30
-    };
-    let inverse_mass_a = scale_u32_q30(a.inverse_mass_q24(), scale_a);
-    let inverse_inertia_a = scale_u64_q30(a.inverse_inertia_q40(), scale_a);
-    let inverse_mass_b = b
-        .map(|body| scale_u32_q30(body.inverse_mass_q24(), scale_b))
-        .unwrap_or(0);
-    let inverse_inertia_b = b
-        .map(|body| scale_u64_q30(body.inverse_inertia_q40(), scale_b))
-        .unwrap_or(0);
-    let inverse_sum_q24 = inverse_mass_a as u64
-        + inverse_mass_b as u64
-        + rotational_inverse_mass_q24(regular.lever_a_q16, inverse_inertia_a)
-        + rotational_inverse_mass_q24(regular.lever_b_q16, inverse_inertia_b);
-    if inverse_sum_q24 == 0 {
-        return AxisConstraint {
-            lever_a_q16: regular.lever_a_q16,
-            lever_b_q16: regular.lever_b_q16,
-            ..AxisConstraint::default()
-        };
-    }
-    AxisConstraint {
-        inverse_sum_q24,
-        angular_response_a_q17: angular_response_q17(
-            inverse_inertia_a,
-            regular.lever_a_q16,
-            inverse_sum_q24,
-        ),
-        angular_response_b_q17: angular_response_q17(
-            inverse_inertia_b,
-            regular.lever_b_q16,
-            inverse_sum_q24,
-        ),
-        linear_response_a_q31: linear_response_q31(inverse_mass_a, inverse_sum_q24),
-        linear_response_b_q31: linear_response_q31(inverse_mass_b, inverse_sum_q24),
-        lever_a_q16: regular.lever_a_q16,
-        lever_b_q16: regular.lever_b_q16,
-    }
-}
-
-#[inline(always)]
-fn square_q30(value_q30: u32) -> u32 {
-    ((value_q30 as u64 * value_q30 as u64 + (1 << 29)) >> 30)
-        .min(SUPPORT_SCALE_Q30) as u32
-}
-
-#[inline(always)]
-fn multiply_q30(a_q30: u32, b_q30: u32) -> u32 {
-    ((a_q30 as u64 * b_q30 as u64 + (1 << 29)) >> 30)
-        .min(SUPPORT_SCALE_Q30) as u32
-}
-
-#[inline(always)]
-fn axis_dot_q30(a: UnitVector, b: UnitVector) -> i64 {
-    let [ax, ay] = a.raw();
-    let [bx, by] = b.raw();
-    (ax as i64 * bx as i64 + ay as i64 * by as i64 + (1 << 29)) >> 30
-}
-
-#[inline(always)]
-fn scale_u32_q30(value: u32, scale_q30: u64) -> u32 {
-    ((value as u64 * scale_q30 + (1 << 29)) >> 30).min(u32::MAX as u64) as u32
-}
-
-#[inline(always)]
-fn scale_u64_q30(value: u64, scale_q30: u64) -> u64 {
-    (((value as u128 * scale_q30 as u128) + (1 << 29)) >> 30).min(u64::MAX as u128) as u64
-}
-
-#[inline(always)]
-fn scale_signed_i32_q30(value: i32, scale_q30: u32) -> i32 {
-    let magnitude = ((value.unsigned_abs() as u64 * scale_q30 as u64 + (1 << 29)) >> 30) as i32;
-    if value < 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
-}
-
-#[inline(always)]
-fn rotational_inverse_mass_q24(lever_q16: i32, inverse_inertia_q40: u64) -> u64 {
-    let lever = lever_q16.unsigned_abs() as u128;
-    let product = lever * lever * inverse_inertia_q40 as u128;
-    ((product + (1_u128 << 47)) >> 48).min(u64::MAX as u128) as u64
 }
 
 fn prepare_axis_constraint(
@@ -593,41 +150,72 @@ pub(super) fn solve_velocities(
     }
 }
 
-pub(super) fn solve_shock_velocities(
-    world: &mut World,
-    constraints: &mut [ContactConstraint],
-    shock: &ShockSet,
-    accumulators: &mut [u64],
-) {
-    debug_assert_eq!(constraints.len(), world.active_contacts.len());
-    debug_assert_eq!(accumulators.len(), shock.constraints.len());
-    for (shock_index, shock_constraint) in shock.constraints.iter().copied().enumerate() {
-        let contact_index = shock_constraint.contact_index;
-        solve_shock_velocity(
-            world,
-            contact_index,
-            shock_constraint.normal,
-            &mut accumulators[shock_index],
+/// Discards one eighth of the body-owned contact impulse once per tick.
+/// Decaying it here, rather than while it crosses contacts, makes the result
+/// independent of contact count and solver iteration count.
+pub(super) fn decay_deferred_contact_impulses(world: &mut World) {
+    for body in &mut world.bodies {
+        let [x, y] = body.state().deferred_contact_linear().raw();
+        let angular = body.state().deferred_contact_angular().raw();
+        body.state_mut().deferred_contact_linear = LinearVelocity::from_wide_saturated(
+            round_shift_signed(x as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+            round_shift_signed(y as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
         );
-        solve_friction_velocity(world, contact_index, &mut constraints[contact_index]);
+        body.state_mut().deferred_contact_angular = AngularVelocity::from_wide_saturated(
+            round_shift_signed(angular as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+        );
     }
 }
 
-pub(super) fn apply_angular_support(world: &mut World, shock: &ShockSet) {
-    debug_assert_eq!(shock.angular_support_q30.len(), world.bodies.len());
-    for (body, support_q30) in world
-        .bodies
-        .iter_mut()
-        .zip(shock.angular_support_q30.iter().copied())
-    {
-        if support_q30 == 0 || body.state().is_sleeping() {
-            continue;
+/// Removes the remaining inward velocity of existing inelastic contacts and
+/// stores the removed linear and angular motion on each body. Each visit is a
+/// direct projection onto the contact's non-penetration half-space; no contact
+/// lambda is accumulated or cached by this stage.
+pub(super) fn capture_blocked_contact_impulses(
+    world: &mut World,
+    constraints: &[ContactConstraint],
+) {
+    debug_assert_eq!(constraints.len(), world.active_contacts.len());
+    let iterations = world.settings.velocity_iterations.max(1) as usize;
+    for iteration in 0..iterations {
+        for step in 0..constraints.len() {
+            let index = if iteration & 1 == 0 {
+                constraints.len() - 1 - step
+            } else {
+                step
+            };
+            if constraints[index].normal_target_speed_q10 != 0 {
+                continue;
+            }
+            project_body_velocities_to_contact(world, index);
         }
-        let retention_q30 = SUPPORT_SCALE_Q30 as u32 - support_q30;
-        let angular_velocity = body.state().angular_velocity().raw();
-        let retained = scale_signed_i32_q30(angular_velocity, retention_q30);
-        body.state_mut().angular_velocity = AngularVelocity::from_raw(retained);
+        if !has_inward_contact_velocity(world, constraints) {
+            break;
+        }
     }
+}
+
+fn has_inward_contact_velocity(world: &World, constraints: &[ContactConstraint]) -> bool {
+    constraints.iter().enumerate().any(|(index, constraint)| {
+        if constraint.normal_target_speed_q10 != 0 || constraint.normal.inverse_sum_q24 == 0 {
+            return false;
+        }
+        let contact = world.active_contacts[index];
+        let a = &world.bodies[contact.body_a];
+        let b = match contact.body_b {
+            ContactBodyIndex::Dynamic(index_b) => Some(&world.bodies[index_b]),
+            ContactBodyIndex::Static(_) => None,
+        };
+        let speed_a = point_speed_along(a, contact.point, contact.normal);
+        let speed_b = b
+            .map(|body| point_speed_along(body, contact.point, contact.normal))
+            .unwrap_or(0);
+        let a_is_blocked = speed_a
+            > speed_b.max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
+        let b_is_blocked = b.is_some()
+            && -speed_b > (-speed_a).max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
+        a_is_blocked || b_is_blocked
+    })
 }
 
 pub(super) fn prepare_warm_start(world: &mut World, constraints: &mut [ContactConstraint]) {
@@ -649,7 +237,8 @@ pub(super) fn prepare_warm_start(world: &mut World, constraints: &mut [ContactCo
                 ContactBodyIndex::Static(_) => None,
             });
         if let Some(cached) = cached {
-            constraint.normal_velocity_change_q10 = cached.normal_velocity_change_q10;
+            constraint.normal_velocity_change_q10 =
+                cached.normal_velocity_change_q10.min(u32::MAX as u64) as u32;
             let tangent_limit = friction_velocity_change_limit_q10(
                 cached.normal_velocity_change_q10,
                 constraint.friction_response_q31,
@@ -678,7 +267,7 @@ pub(super) fn rebuild_contact_cache(world: &mut World, constraints: &[ContactCon
         };
         let hot = HotContact {
             identity,
-            normal_velocity_change_q10: constraint.normal_velocity_change_q10,
+            normal_velocity_change_q10: constraint.normal_velocity_change_q10 as u64,
             tangent_velocity_change_q10: constraint.tangent_velocity_change_q10,
         };
         next[contact.body_a].insert(hot);
@@ -773,6 +362,12 @@ fn solve_velocity(world: &mut World, index: usize, constraint: &mut ContactConst
     let contact = world.active_contacts[index];
     match contact.body_b {
         ContactBodyIndex::Static(_) => {
+            solve_deferred_contact_velocity(
+                &mut world.bodies[contact.body_a],
+                None,
+                &contact,
+                constraint,
+            );
             solve_contact_velocity(
                 &mut world.bodies[contact.body_a],
                 None,
@@ -782,163 +377,71 @@ fn solve_velocity(world: &mut World, index: usize, constraint: &mut ContactConst
         }
         ContactBodyIndex::Dynamic(index_b) => {
             let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
+            solve_deferred_contact_velocity(a, Some(&mut *b), &contact, constraint);
             solve_contact_velocity(a, Some(b), &contact, constraint);
         }
     }
 }
 
-fn solve_shock_velocity(
+fn project_body_velocities_to_contact(
     world: &mut World,
     index: usize,
-    normal_constraint: AxisConstraint,
-    accumulator: &mut u64,
 ) {
     let contact = world.active_contacts[index];
     match contact.body_b {
-        ContactBodyIndex::Static(_) => solve_shock_contact_velocity(
-            &mut world.bodies[contact.body_a],
-            None,
-            &contact,
-            normal_constraint,
-            accumulator,
-        ),
+        ContactBodyIndex::Static(_) => {
+            project_body_velocity_pair(&mut world.bodies[contact.body_a], None, &contact)
+        }
         ContactBodyIndex::Dynamic(index_b) => {
             let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            solve_shock_contact_velocity(
-                a,
-                Some(b),
-                &contact,
-                normal_constraint,
-                accumulator,
-            );
+            project_body_velocity_pair(a, Some(b), &contact);
         }
     }
 }
 
-fn solve_friction_velocity(
-    world: &mut World,
-    index: usize,
-    constraint: &mut ContactConstraint,
-) {
-    let contact = world.active_contacts[index];
-    match contact.body_b {
-        ContactBodyIndex::Static(_) => solve_contact_friction(
-            &mut world.bodies[contact.body_a],
-            None,
-            &contact,
-            constraint,
-        ),
-        ContactBodyIndex::Dynamic(index_b) => {
-            let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            solve_contact_friction(a, Some(b), &contact, constraint);
-        }
-    }
-}
-
-pub(super) fn correct_positions(world: &mut World, shock: &ShockSet) {
-    debug_assert_eq!(shock.position_parents.len(), world.active_contacts.len());
-    // Supported contacts are already ordered by BFS depth, so positional
-    // correction also travels from the static field toward the island edge.
-    for constraint in &shock.constraints {
-        let contact_index = constraint.contact_index;
-        let Some(parent) = shock.position_parents[contact_index] else {
+pub(super) fn correct_positions(world: &mut World) {
+    for contact in world.active_contacts.iter().copied() {
+        if !contact.key.correct_position() {
             continue;
-        };
-        correct_supported_position(world, world.active_contacts[contact_index], parent);
-    }
-    for contact_index in 0..world.active_contacts.len() {
-        if shock.position_parents[contact_index].is_none() {
-            let contact = world.active_contacts[contact_index];
-            correct_symmetric_position(world, contact);
         }
-    }
-}
+        let correction = contact
+            .penetration
+            .raw()
+            .saturating_sub(POSITION_SLOP_RAW)
+            .saturating_mul(4)
+            / 5;
+        let correction = correction.min(MAX_POSITION_CORRECTION_RAW);
+        if correction == 0 {
+            continue;
+        }
 
-fn position_correction(contact: ActiveContact) -> u32 {
-    if !contact.key.correct_position() {
-        return 0;
-    }
-    (contact
-        .penetration
-        .raw()
-        .saturating_sub(POSITION_SLOP_RAW)
-        .saturating_mul(4)
-        / 5)
-        .min(MAX_POSITION_CORRECTION_RAW)
-}
+        if let ContactBodyIndex::Static(_) = contact.body_b {
+            let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as u64);
+            add_position(&mut world.bodies[contact.body_a], -move_x, -move_y);
+            continue;
+        }
 
-fn correct_supported_position(world: &mut World, contact: ActiveContact, parent: ShockParent) {
-    let correction = position_correction(contact);
-    if correction == 0 {
-        return;
-    }
-    if matches!(parent, ShockParent::Static) {
-        let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as u64);
-        add_position(&mut world.bodies[contact.body_a], -move_x, -move_y);
-        return;
-    }
-    let ContactBodyIndex::Dynamic(index_b) = contact.body_b else {
-        unreachable!()
-    };
-    let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-    let inverse_a = if matches!(parent, ShockParent::BodyA) {
-        scale_u32_q30(a.inverse_mass_q24(), POSITION_PARENT_SCALE_Q30) as u64
-    } else {
-        a.inverse_mass_q24() as u64
-    };
-    let inverse_b = if matches!(parent, ShockParent::BodyB) {
-        scale_u32_q30(b.inverse_mass_q24(), POSITION_PARENT_SCALE_Q30) as u64
-    } else {
-        b.inverse_mass_q24() as u64
-    };
-    apply_position_correction(a, b, contact.normal, correction, inverse_a, inverse_b);
-}
+        let ContactBodyIndex::Dynamic(index_b) = contact.body_b else {
+            unreachable!()
+        };
+        let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
+        let inverse_a = a.inverse_mass_q24() as u64;
+        let inverse_b = b.inverse_mass_q24() as u64;
+        let inverse_sum = inverse_a + inverse_b;
+        if inverse_sum == 0 {
+            continue;
+        }
 
-fn correct_symmetric_position(world: &mut World, contact: ActiveContact) {
-    let correction = position_correction(contact);
-    if correction == 0 {
-        return;
-    }
-    if let ContactBodyIndex::Static(_) = contact.body_b {
-        let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as u64);
-        add_position(&mut world.bodies[contact.body_a], -move_x, -move_y);
-        return;
-    }
-    let ContactBodyIndex::Dynamic(index_b) = contact.body_b else {
-        unreachable!()
-    };
-    let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-    apply_position_correction(
-        a,
-        b,
-        contact.normal,
-        correction,
-        a.inverse_mass_q24() as u64,
-        b.inverse_mass_q24() as u64,
-    );
-}
-
-fn apply_position_correction(
-    a: &mut Body,
-    b: &mut Body,
-    normal: UnitVector,
-    correction: u32,
-    inverse_a: u64,
-    inverse_b: u64,
-) {
-    let inverse_sum = inverse_a + inverse_b;
-    if inverse_sum == 0 {
-        return;
-    }
-    let move_a = div_round(correction as u64 * inverse_a, inverse_sum);
-    let move_b = div_round(correction as u64 * inverse_b, inverse_sum);
-    if inverse_a != 0 {
-        let [move_x, move_y] = normal.scaled_wide_raw(move_a);
-        add_position(a, -move_x, -move_y);
-    }
-    if inverse_b != 0 {
-        let [move_x, move_y] = normal.scaled_wide_raw(move_b);
-        add_position(b, move_x, move_y);
+        let move_a = div_round(correction as u64 * inverse_a, inverse_sum);
+        let move_b = div_round(correction as u64 * inverse_b, inverse_sum);
+        if inverse_a != 0 {
+            let [move_x, move_y] = contact.normal.scaled_wide_raw(move_a);
+            add_position(a, -move_x, -move_y);
+        }
+        if inverse_b != 0 {
+            let [move_x, move_y] = contact.normal.scaled_wide_raw(move_b);
+            add_position(b, move_x, move_y);
+        }
     }
 }
 
@@ -960,12 +463,12 @@ fn solve_contact_velocity(
         constraint.normal.lever_a_q16,
         constraint.normal.lever_b_q16,
     );
-    let previous_normal = constraint.normal_velocity_change_q10;
+    let previous_normal = constraint.normal_velocity_change_q10 as u64;
     let candidate_normal =
         previous_normal as i64 + constraint.normal_target_speed_q10 as i64 - normal_speed as i64;
     let accumulated_normal = candidate_normal.max(0) as u64;
     let normal_velocity_change = accumulated_normal as i64 - previous_normal as i64;
-    constraint.normal_velocity_change_q10 = accumulated_normal;
+    constraint.normal_velocity_change_q10 = accumulated_normal.min(u32::MAX as u64) as u32;
     if normal_velocity_change != 0 {
         apply_contact_impulse(
             a,
@@ -982,50 +485,19 @@ fn solve_contact_velocity(
     solve_contact_friction(a, b, contact, constraint);
 }
 
-fn solve_shock_contact_velocity(
-    a: &mut Body,
-    b: Option<&mut Body>,
-    contact: &ActiveContact,
-    normal_constraint: AxisConstraint,
-    accumulator: &mut u64,
-) {
-    let normal_speed = relative_speed_along_levers(
-        a,
-        b.as_deref(),
-        contact.normal,
-        normal_constraint.lever_a_q16,
-        normal_constraint.lever_b_q16,
-    );
-    let previous = *accumulator;
-    let candidate = previous as i64 - normal_speed as i64;
-    let accumulated = candidate.max(0) as u64;
-    let velocity_change = accumulated as i64 - previous as i64;
-    *accumulator = accumulated;
-    apply_contact_impulse(
-        a,
-        b,
-        contact.normal,
-        velocity_change,
-        normal_constraint.linear_response_a_q31,
-        normal_constraint.linear_response_b_q31,
-        normal_constraint.angular_response_a_q17,
-        normal_constraint.angular_response_b_q17,
-    );
-}
-
 fn solve_contact_friction(
     a: &mut Body,
     b: Option<&mut Body>,
     contact: &ActiveContact,
     constraint: &mut ContactConstraint,
 ) {
-    let normal = contact.normal;
-
-    if constraint.friction_response_q31 == 0 || constraint.normal_velocity_change_q10 == 0 {
+    let total_normal_velocity_change = (constraint.normal_velocity_change_q10 as u64)
+        .saturating_add(constraint.deferred_normal_velocity_change_q10 as u64);
+    if constraint.friction_response_q31 == 0 || total_normal_velocity_change == 0 {
         return;
     }
 
-    let tangent = normal.perpendicular();
+    let tangent = contact.normal.perpendicular();
     if constraint.tangent.inverse_sum_q24 == 0 {
         return;
     }
@@ -1040,7 +512,7 @@ fn solve_contact_friction(
     let previous = constraint.tangent_velocity_change_q10;
     let candidate = previous.saturating_sub(tangent_speed as i64);
     let limit = friction_velocity_change_limit_q10(
-        constraint.normal_velocity_change_q10,
+        total_normal_velocity_change,
         constraint.friction_response_q31,
     );
     let accumulated = candidate.clamp(-limit, limit);
@@ -1056,6 +528,122 @@ fn solve_contact_friction(
         constraint.tangent.linear_response_b_q31,
         constraint.tangent.angular_response_a_q17,
         constraint.tangent.angular_response_b_q17,
+    );
+}
+
+#[inline(always)]
+fn deferred_contact_speed_along_levers(
+    a: &Body,
+    b: Option<&Body>,
+    axis: UnitVector,
+    lever_a_q16: i32,
+    lever_b_q16: i32,
+) -> i32 {
+    let deferred_a = a.state().deferred_contact_linear();
+    let deferred_b = b
+        .map(|body| body.state().deferred_contact_linear())
+        .unwrap_or_default();
+    let linear = axis.dot(deferred_b - deferred_a);
+    let angular_a = a
+        .state()
+        .deferred_contact_angular()
+        .projected_point_speed_raw(lever_a_q16);
+    let angular_b = b
+        .map(|body| {
+            body.state()
+                .deferred_contact_angular()
+                .projected_point_speed_raw(lever_b_q16)
+        })
+        .unwrap_or(0);
+    (linear + angular_b as i64 - angular_a as i64).clamp(
+        -(MAX_RELATIVE_CONTACT_SPEED_RAW as i64),
+        MAX_RELATIVE_CONTACT_SPEED_RAW as i64,
+    ) as i32
+}
+
+fn solve_deferred_contact_velocity(
+    a: &mut Body,
+    mut b: Option<&mut Body>,
+    contact: &ActiveContact,
+    constraint: &mut ContactConstraint,
+) {
+    if constraint.normal_target_speed_q10 != 0 || constraint.normal.inverse_sum_q24 == 0 {
+        return;
+    }
+    let normal_speed = deferred_contact_speed_along_levers(
+        a,
+        b.as_deref(),
+        contact.normal,
+        constraint.normal.lever_a_q16,
+        constraint.normal.lever_b_q16,
+    );
+    let previous = constraint.deferred_normal_velocity_change_q10 as u64;
+    let candidate = previous as i64 - normal_speed as i64;
+    let accumulated = candidate.max(0) as u64;
+    let velocity_change = accumulated as i64 - previous as i64;
+    constraint.deferred_normal_velocity_change_q10 = accumulated.min(u32::MAX as u64) as u32;
+    apply_deferred_contact_impulse(
+        a,
+        b.as_deref_mut(),
+        contact.normal,
+        velocity_change,
+        constraint.normal.linear_response_a_q31,
+        constraint.normal.linear_response_b_q31,
+        constraint.normal.angular_response_a_q17,
+        constraint.normal.angular_response_b_q17,
+    );
+}
+
+fn project_body_velocity_pair(
+    a: &mut Body,
+    mut b: Option<&mut Body>,
+    contact: &ActiveContact,
+) {
+    // Project A against B's point speed. If B itself moves inward through A,
+    // its speed is not a valid moving boundary and the limit becomes zero.
+    let speed_b = b
+        .as_deref()
+        .map(|body| point_speed_along(body, contact.point, contact.normal))
+        .unwrap_or(0);
+    project_single_body_velocity(a, contact, contact.normal, speed_b.max(0));
+
+    // Apply the same rule from B's point of view. Re-read A after its
+    // projection so the second limit describes the current contact motion.
+    if let Some(body_b) = b.as_deref_mut() {
+        let speed_a = point_speed_along(a, contact.point, contact.normal);
+        project_single_body_velocity(body_b, contact, -contact.normal, (-speed_a).max(0));
+    }
+}
+
+fn project_single_body_velocity(
+    body: &mut Body,
+    contact: &ActiveContact,
+    axis: UnitVector,
+    contact_speed_limit: i64,
+) {
+    let body_speed = point_speed_along(body, contact.point, axis);
+    let excess = body_speed.saturating_sub(contact_speed_limit);
+    if excess <= 0 {
+        return;
+    }
+    let lever_q16 = contact_lever_cross_axis(body, contact.point, axis);
+    let inverse_sum_q24 = contact_inverse_mass_q24(body, None, lever_q16, 0);
+    if inverse_sum_q24 == 0 {
+        return;
+    }
+    let velocity_change = excess.min(MAX_RELATIVE_CONTACT_SPEED_RAW as i64);
+    let linear_response = linear_response_q31(body.inverse_mass_q24(), inverse_sum_q24);
+    let angular_response =
+        angular_response_q17(body.inverse_inertia_q40(), lever_q16, inverse_sum_q24);
+    apply_contact_impulse_and_defer(
+        body,
+        None,
+        axis,
+        velocity_change,
+        linear_response,
+        0,
+        angular_response,
+        0,
     );
 }
 
@@ -1097,6 +685,120 @@ fn apply_contact_impulse(
             angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q17);
         add_angular_velocity(body, angular_change_b);
     }
+}
+
+/// Transfers the deferred channel through a contact without modifying the
+/// body's real linear or angular velocity.
+fn apply_deferred_contact_impulse(
+    a: &mut Body,
+    b: Option<&mut Body>,
+    mut axis: UnitVector,
+    impulse_numerator_q10: i64,
+    linear_response_a_q31: u32,
+    linear_response_b_q31: u32,
+    angular_response_a_q17: i64,
+    angular_response_b_q17: i64,
+) {
+    if impulse_numerator_q10 == 0 {
+        return;
+    }
+
+    if impulse_numerator_q10 < 0 {
+        axis = -axis;
+    }
+    let magnitude = impulse_numerator_q10.unsigned_abs();
+    let change_a = linear_velocity_change_raw(magnitude, linear_response_a_q31);
+    if change_a != 0 {
+        let [change_x, change_y] = axis.scaled_wide_raw(change_a);
+        add_deferred_linear_velocity(a, -change_x, -change_y);
+    }
+    let angular_change_a =
+        angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q17);
+    add_deferred_angular_velocity(a, -angular_change_a);
+
+    if let Some(body) = b {
+        let change_b = linear_velocity_change_raw(magnitude, linear_response_b_q31);
+        if change_b != 0 {
+            let [change_x, change_y] = axis.scaled_wide_raw(change_b);
+            add_deferred_linear_velocity(body, change_x, change_y);
+        }
+        let angular_change_b =
+            angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q17);
+        add_deferred_angular_velocity(body, angular_change_b);
+    }
+}
+
+/// Applies the correction to the real velocity so this tick cannot advance
+/// farther into the contact. One eighth of the removed motion is
+/// discarded immediately; the retained opposite response is stored on the
+/// bodies and used only as contact-equation input on following ticks.
+fn apply_contact_impulse_and_defer(
+    a: &mut Body,
+    b: Option<&mut Body>,
+    mut axis: UnitVector,
+    impulse_numerator_q10: i64,
+    linear_response_a_q31: u32,
+    linear_response_b_q31: u32,
+    angular_response_a_q17: i64,
+    angular_response_b_q17: i64,
+) {
+    if impulse_numerator_q10 == 0 {
+        return;
+    }
+
+    if impulse_numerator_q10 < 0 {
+        axis = -axis;
+    }
+    let magnitude = impulse_numerator_q10.unsigned_abs();
+    let change_a = linear_velocity_change_raw(magnitude, linear_response_a_q31);
+    if change_a != 0 {
+        let [change_x, change_y] = axis.scaled_wide_raw(change_a);
+        add_velocity(a, -change_x, -change_y);
+        add_deferred_linear_velocity(
+            a,
+            retain_blocked_velocity(change_x),
+            retain_blocked_velocity(change_y),
+        );
+    }
+    let angular_change_a =
+        angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q17);
+    add_angular_velocity(a, -angular_change_a);
+    add_deferred_angular_velocity(a, retain_blocked_velocity(angular_change_a));
+
+    if let Some(body) = b {
+        let change_b = linear_velocity_change_raw(magnitude, linear_response_b_q31);
+        if change_b != 0 {
+            let [change_x, change_y] = axis.scaled_wide_raw(change_b);
+            add_velocity(body, change_x, change_y);
+            add_deferred_linear_velocity(
+                body,
+                retain_blocked_velocity(-change_x),
+                retain_blocked_velocity(-change_y),
+            );
+        }
+        let angular_change_b =
+            angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q17);
+        add_angular_velocity(body, angular_change_b);
+        add_deferred_angular_velocity(body, retain_blocked_velocity(-angular_change_b));
+    }
+}
+
+#[inline(always)]
+fn retain_blocked_velocity(value: i64) -> i64 {
+    round_shift_signed(value * BLOCKED_VELOCITY_RETENTION_Q16, 16)
+}
+
+#[inline(always)]
+fn add_deferred_linear_velocity(body: &mut Body, dx: i64, dy: i64) {
+    let [x, y] = body.state().deferred_contact_linear.raw();
+    body.state_mut().deferred_contact_linear =
+        LinearVelocity::from_wide_saturated(x as i64 + dx, y as i64 + dy);
+}
+
+#[inline(always)]
+fn add_deferred_angular_velocity(body: &mut Body, delta: i64) {
+    let raw = body.state().deferred_contact_angular.raw() as i64 + delta;
+    body.state_mut().deferred_contact_angular = AngularVelocity::from_wide_saturated(raw);
 }
 
 #[inline(always)]
@@ -1462,6 +1164,175 @@ mod tests {
     }
 
     #[test]
+    fn blocked_contact_response_is_owned_by_the_body_not_the_contact() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, -0.5, 1.0, Material::INELASTIC))
+            .unwrap();
+        world
+            .add_body(circle_body(2, 0.5, -1.0, Material::INELASTIC))
+            .unwrap();
+        let contact = active_contact(
+            0,
+            ContactBodyIndex::Dynamic(1),
+            GeometryPoint::ZERO,
+            UnitVector::X,
+        );
+        world.active_contacts.push(contact);
+        let constraints = prepare_constraints(&world);
+
+        capture_blocked_contact_impulses(&mut world, &constraints);
+
+        let a = &world.bodies[0];
+        let b = &world.bodies[1];
+        assert!(relative_normal_speed(a, Some(b), contact.point, contact.normal) >= 0);
+        assert!(!a.state().deferred_contact_linear().is_zero());
+        assert!(!b.state().deferred_contact_linear().is_zero());
+        assert_eq!(constraints[0].normal_velocity_change_q10, 0);
+    }
+
+    #[test]
+    fn projection_keeps_the_allowed_speed_and_defers_retained_excess() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
+            .unwrap();
+        world.bodies[0].state_mut().linear_velocity =
+            LinearVelocity::from_meters_per_second(0.0, -1.0).unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::IDENTITY,
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+        world.active_contacts.push(active_contact(
+            0,
+            ContactBodyIndex::Static(0),
+            GeometryPoint::ZERO,
+            UnitVector::from_raw(0, -(1 << 30)),
+        ));
+        let constraints = prepare_constraints(&world);
+
+        capture_blocked_contact_impulses(&mut world, &constraints);
+
+        assert_eq!(
+            world.bodies[0].state().linear_velocity(),
+            LinearVelocity::ZERO
+        );
+        assert_eq!(
+            world.bodies[0].state().deferred_contact_linear().raw(),
+            [0, -896]
+        );
+        assert_eq!(
+            world.bodies[0].state().deferred_contact_angular(),
+            AngularVelocity::ZERO
+        );
+    }
+
+    #[test]
+    fn inward_moving_contact_uses_zero_as_the_speed_limit() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, -0.5, 0.0, Material::INELASTIC))
+            .unwrap();
+        world
+            .add_body(circle_body(2, 0.5, -1.0, Material::INELASTIC))
+            .unwrap();
+        let contact = active_contact(
+            0,
+            ContactBodyIndex::Dynamic(1),
+            GeometryPoint::ZERO,
+            UnitVector::X,
+        );
+        world.active_contacts.push(contact);
+        let constraints = prepare_constraints(&world);
+
+        capture_blocked_contact_impulses(&mut world, &constraints);
+
+        assert_eq!(world.bodies[0].state().linear_velocity(), LinearVelocity::ZERO);
+        assert_eq!(world.bodies[1].state().linear_velocity(), LinearVelocity::ZERO);
+        assert!(world.bodies[0].state().deferred_contact_linear().is_zero());
+        assert_eq!(
+            world.bodies[1].state().deferred_contact_linear().raw(),
+            [-896, 0]
+        );
+    }
+
+    #[test]
+    fn deferred_contact_response_is_not_integrated_directly() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
+            .unwrap();
+        world.bodies[0].state_mut().deferred_contact_linear = LinearVelocity::from_raw(500, -250);
+        let before = world.bodies[0].state().transform();
+
+        world.integrate_transforms();
+
+        assert_eq!(world.bodies[0].state().transform(), before);
+    }
+
+    #[test]
+    fn deferred_contact_impulse_loses_one_eighth_each_tick() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
+            .unwrap();
+        world.bodies[0].state_mut().deferred_contact_linear = LinearVelocity::from_raw(101, -101);
+        world.bodies[0].state_mut().deferred_contact_angular = AngularVelocity::from_raw(-101);
+
+        decay_deferred_contact_impulses(&mut world);
+
+        assert_eq!(
+            world.bodies[0].state().deferred_contact_linear().raw(),
+            [88, -88]
+        );
+        assert_eq!(
+            world.bodies[0].state().deferred_contact_angular().raw(),
+            -88
+        );
+        assert_eq!(
+            world.bodies[0].state().linear_velocity(),
+            LinearVelocity::ZERO
+        );
+    }
+
+    #[test]
+    fn deferred_impulse_is_transferred_without_changing_real_velocity() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
+            .unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::IDENTITY,
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+        world.bodies[0].state_mut().deferred_contact_linear = LinearVelocity::from_raw(0, -1024);
+        world.active_contacts.push(active_contact(
+            0,
+            ContactBodyIndex::Static(0),
+            GeometryPoint::ZERO,
+            UnitVector::from_raw(0, -(1 << 30)),
+        ));
+        let mut constraints = prepare_constraints(&world);
+
+        solve_velocities(&mut world, &mut constraints, false);
+
+        assert_eq!(
+            world.bodies[0].state().linear_velocity(),
+            LinearVelocity::ZERO
+        );
+        assert!(constraints[0].deferred_normal_velocity_change_q10 > 0);
+        assert!(world.bodies[0].state().deferred_contact_linear().raw()[1].abs() <= 1);
+    }
+
+    #[test]
     fn tangent_impulse_stops_sliding_at_a_rough_static_contact() {
         let material = Material::new(0.0, 1.0).unwrap();
         let mut body = circle_body(1, 0.0, 1.0, material);
@@ -1576,160 +1447,6 @@ mod tests {
             );
             assert!(vertical_speed < 0.5, "body {index}: vy={vertical_speed}");
         }
-    }
-
-    #[test]
-    fn shock_constraints_follow_support_depth_and_freeze_the_parent_response() {
-        let mut world = World::default();
-        for id in 1..=3 {
-            world
-                .add_body(circle_body(id, 0.0, 0.0, Material::INELASTIC))
-                .unwrap();
-        }
-        world
-            .add_static_body(StaticBody::new(
-                BodyId::new(100),
-                Transform::default(),
-                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
-                Material::INELASTIC,
-            ))
-            .unwrap();
-
-        let down = UnitVector::from_raw(0, -(1 << 30));
-        world.active_contacts.push(active_contact(
-            0,
-            ContactBodyIndex::Static(0),
-            GeometryPoint::ZERO,
-            down,
-        ));
-        world.active_contacts.push(active_contact(
-            1,
-            ContactBodyIndex::Dynamic(0),
-            GeometryPoint::ZERO,
-            down,
-        ));
-        world.active_contacts.push(active_contact(
-            2,
-            ContactBodyIndex::Dynamic(1),
-            GeometryPoint::ZERO,
-            down,
-        ));
-
-        let regular = prepare_constraints(&world);
-        let shock = prepare_shock_constraints(&world, &regular);
-
-        assert_eq!(shock.constraints.len(), 3);
-        assert_eq!(
-            shock
-                .constraints
-                .iter()
-                .map(|constraint| (constraint.contact_index, constraint.depth))
-                .collect::<Vec<_>>(),
-            [(0, 0), (1, 1), (2, 2)]
-        );
-        for constraint in &shock.constraints[1..] {
-            assert_eq!(constraint.normal.linear_response_a_q31, ONE_LINEAR_RESPONSE_Q31 as u32);
-            assert_eq!(constraint.normal.linear_response_b_q31, 0);
-            assert_eq!(constraint.normal.angular_response_b_q17, 0);
-        }
-        assert_eq!(shock.angular_support_q30, [0, 0, 0]);
-
-    }
-
-    #[test]
-    fn angular_support_requires_two_sided_contacts_and_attenuates_upward() {
-        let mut world = World::default();
-        for id in 1..=3 {
-            world
-                .add_body(circle_body(id, 0.0, 0.0, Material::INELASTIC))
-                .unwrap();
-        }
-        world
-            .add_static_body(StaticBody::new(
-                BodyId::new(100),
-                Transform::default(),
-                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
-                Material::INELASTIC,
-            ))
-            .unwrap();
-
-        let down = UnitVector::from_raw(0, -(1 << 30));
-        let contact_points = [
-            Position::from_meters(-0.25, 0.0).unwrap().into(),
-            Position::from_meters(0.25, 0.0).unwrap().into(),
-        ];
-        for point in contact_points {
-            world.active_contacts.push(active_contact(
-                0,
-                ContactBodyIndex::Static(0),
-                point,
-                down,
-            ));
-            world.active_contacts.push(active_contact(
-                1,
-                ContactBodyIndex::Dynamic(0),
-                point,
-                down,
-            ));
-            world.active_contacts.push(active_contact(
-                2,
-                ContactBodyIndex::Dynamic(1),
-                point,
-                down,
-            ));
-        }
-
-        let regular = prepare_constraints(&world);
-        let shock = prepare_shock_constraints(&world, &regular);
-
-        assert_eq!(
-            shock.angular_support_q30,
-            [1 << 28, 3 << 26, 9 << 24]
-        );
-        for body in &mut world.bodies {
-            body.state_mut().angular_velocity =
-                AngularVelocity::from_radians_per_second(1.0).unwrap();
-        }
-        apply_angular_support(&mut world, &shock);
-        assert_eq!(world.bodies[0].state().angular_velocity().raw(), 3 << 14);
-        assert_eq!(world.bodies[1].state().angular_velocity().raw(), 13 << 12);
-        assert_eq!(world.bodies[2].state().angular_velocity().raw(), 55 << 10);
-    }
-
-    #[test]
-    fn supported_position_correction_moves_the_parent_four_times_less() {
-        let mut world = World::default();
-        world
-            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
-            .unwrap();
-        world
-            .add_body(circle_body(2, 0.0, 0.0, Material::INELASTIC))
-            .unwrap();
-        let mut contact = active_contact(
-            0,
-            ContactBodyIndex::Dynamic(1),
-            GeometryPoint::ZERO,
-            UnitVector::from_raw(0, 1 << 30),
-        );
-        contact.penetration = Length::from_meters(0.1).unwrap();
-        world.active_contacts.push(contact);
-        let shock = ShockSet {
-            constraints: alloc::vec![ShockConstraint {
-                contact_index: 0,
-                depth: 1,
-                normal: AxisConstraint::default(),
-            }],
-            angular_support_q30: alloc::vec![0; 2],
-            position_parents: alloc::vec![Some(ShockParent::BodyA)],
-        };
-
-        correct_positions(&mut world, &shock);
-
-        let lower_y = world.bodies[0].state().transform().position.raw()[1];
-        let upper_y = world.bodies[1].state().transform().position.raw()[1];
-        assert!(lower_y < 0);
-        assert!(upper_y > 0);
-        assert!(upper_y >= 3 * lower_y.unsigned_abs() as i32);
     }
 
     #[test]
