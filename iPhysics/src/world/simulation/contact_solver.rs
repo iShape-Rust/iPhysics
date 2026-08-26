@@ -9,6 +9,7 @@ use crate::{AngularVelocity, UnitVector};
 const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
+const MAX_ANGULAR_RESPONSE_Q24: u64 = AngularVelocity::MAX_CHANGE << 24;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ContactImpulseState {
@@ -18,7 +19,12 @@ pub(super) struct ContactImpulseState {
     normal_velocity_change_q10: u64,
     tangent_velocity_change_q10: i64,
     normal_target_speed_q10: u64,
+    normal_angular_response_a_q24: i64,
+    normal_angular_response_b_q24: i64,
+    tangent_angular_response_a_q24: i64,
+    tangent_angular_response_b_q24: i64,
     normal_initialized: bool,
+    tangent_initialized: bool,
 }
 
 pub(super) fn solve_velocities(world: &mut World, impulse_states: &mut [ContactImpulseState]) {
@@ -129,6 +135,12 @@ fn solve_contact_velocity(
     if !impulse_state.normal_initialized {
         impulse_state.normal_target_speed_q10 =
             restitution_target_speed(normal_speed, restitution_q16);
+        impulse_state.normal_angular_response_a_q24 =
+            angular_response_q24(a.inverse_inertia_q40(), rap, normal_inverse_sum);
+        impulse_state.normal_angular_response_b_q24 = b
+            .as_deref()
+            .map(|body| angular_response_q24(body.inverse_inertia_q40(), rbp, normal_inverse_sum))
+            .unwrap_or(0);
         impulse_state.normal_initialized = true;
     }
     let previous_normal = impulse_state.normal_velocity_change_q10;
@@ -144,8 +156,8 @@ fn solve_contact_velocity(
             normal,
             normal_velocity_change,
             normal_inverse_sum,
-            rap,
-            rbp,
+            impulse_state.normal_angular_response_a_q24,
+            impulse_state.normal_angular_response_b_q24,
         );
     }
 
@@ -162,6 +174,15 @@ fn solve_contact_velocity(
     let tangent_inverse_sum = contact_inverse_mass_q24(a, b.as_deref(), rat, rbt);
     if tangent_inverse_sum == 0 {
         return;
+    }
+    if !impulse_state.tangent_initialized {
+        impulse_state.tangent_angular_response_a_q24 =
+            angular_response_q24(a.inverse_inertia_q40(), rat, tangent_inverse_sum);
+        impulse_state.tangent_angular_response_b_q24 = b
+            .as_deref()
+            .map(|body| angular_response_q24(body.inverse_inertia_q40(), rbt, tangent_inverse_sum))
+            .unwrap_or(0);
+        impulse_state.tangent_initialized = true;
     }
 
     let tangent_speed = relative_speed_along(a, b.as_deref(), contact.point, tangent);
@@ -183,8 +204,8 @@ fn solve_contact_velocity(
         tangent,
         velocity_change,
         tangent_inverse_sum,
-        rat,
-        rbt,
+        impulse_state.tangent_angular_response_a_q24,
+        impulse_state.tangent_angular_response_b_q24,
     );
 }
 
@@ -194,8 +215,8 @@ fn apply_contact_impulse(
     mut axis: UnitVector,
     impulse_numerator_q10: i64,
     inverse_sum_q24: u64,
-    mut lever_a_q16: i32,
-    mut lever_b_q16: i32,
+    angular_response_a_q24: i64,
+    angular_response_b_q24: i64,
 ) {
     if impulse_numerator_q10 == 0 {
         return;
@@ -203,23 +224,18 @@ fn apply_contact_impulse(
 
     if impulse_numerator_q10 < 0 {
         axis = -axis;
-        lever_a_q16 = -lever_a_q16;
-        lever_b_q16 = -lever_b_q16;
     }
     let magnitude = impulse_numerator_q10.unsigned_abs();
     debug_assert!(magnitude <= MAX_VELOCITY_CHANGE_RAW);
     let inverse_a = a.inverse_mass_q24() as u64;
     let inverse_b = b.as_deref().map(Body::inverse_mass_q24).unwrap_or(0) as u64;
-    let inverse_inertia_a = a.inverse_inertia_q40();
-    let inverse_inertia_b = b.as_deref().map(Body::inverse_inertia_q40).unwrap_or(0);
-
     let change_a = div_round(magnitude * inverse_a, inverse_sum_q24);
     if change_a != 0 {
         let [change_x, change_y] = axis.scaled_wide_raw(change_a);
         add_velocity(a, -change_x, -change_y);
     }
     let angular_change_a =
-        angular_velocity_change_raw(magnitude, inverse_inertia_a, lever_a_q16, inverse_sum_q24);
+        angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q24);
     add_angular_velocity(a, -angular_change_a);
 
     if let Some(body) = b {
@@ -229,7 +245,7 @@ fn apply_contact_impulse(
             add_velocity(body, change_x, change_y);
         }
         let angular_change_b =
-            angular_velocity_change_raw(magnitude, inverse_inertia_b, lever_b_q16, inverse_sum_q24);
+            angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q24);
         add_angular_velocity(body, angular_change_b);
     }
 }
@@ -249,24 +265,32 @@ fn friction_velocity_change_limit_q10(
 }
 
 #[inline(always)]
-fn angular_velocity_change_raw(
-    velocity_change_q10: u64,
-    inverse_inertia_q40: u64,
-    lever_q16: i32,
-    inverse_sum_q24: u64,
-) -> i64 {
+fn angular_response_q24(inverse_inertia_q40: u64, lever_q16: i32, inverse_sum_q24: u64) -> i64 {
     if inverse_inertia_q40 == 0 || lever_q16 == 0 {
         return 0;
     }
 
-    // Q10 * Q40 * Q16 / Q24 -> Q42; the extra shift yields angular Q16.
-    let numerator = velocity_change_q10 as u128
-        * inverse_inertia_q40 as u128
-        * lever_q16.unsigned_abs() as u128;
-    let denominator = (inverse_sum_q24 as u128) << 26;
-    let magnitude = div_round_scaled_u128(numerator, denominator, AngularVelocity::MAX_CHANGE);
-    let magnitude = magnitude as i64;
+    // This response maps a Q10 contact-speed change to angular Q16. Keeping
+    // 24 fractional response bits changes the original 26-bit denominator
+    // adjustment into a two-bit shift paid once per contact axis.
+    let numerator = inverse_inertia_q40 as u128 * lever_q16.unsigned_abs() as u128;
+    let denominator = (inverse_sum_q24 as u128) << 2;
+    let magnitude = ((numerator + (denominator >> 1)) / denominator)
+        .min(MAX_ANGULAR_RESPONSE_Q24 as u128) as i64;
     if lever_q16 < 0 { -magnitude } else { magnitude }
+}
+
+#[inline(always)]
+fn angular_velocity_change_raw(velocity_change_q10: i64, angular_response_q24: i64) -> i64 {
+    if velocity_change_q10 == 0 || angular_response_q24 == 0 {
+        return 0;
+    }
+
+    let negative = (velocity_change_q10 < 0) ^ (angular_response_q24 < 0);
+    let product =
+        velocity_change_q10.unsigned_abs() as u128 * angular_response_q24.unsigned_abs() as u128;
+    let magnitude = ((product + (1 << 23)) >> 24).min(AngularVelocity::MAX_CHANGE as u128) as i64;
+    if negative { -magnitude } else { magnitude }
 }
 
 #[inline(always)]
@@ -292,30 +316,6 @@ fn div_round(numerator: u64, denominator: u64) -> u64 {
     let quotient = numerator / denominator;
     let remainder = numerator % denominator;
     quotient + u64::from(remainder >= denominator - remainder)
-}
-
-#[inline(always)]
-fn div_round_scaled_u128(numerator: u128, denominator: u128, limit: u64) -> u64 {
-    debug_assert!(denominator > 0);
-    debug_assert!(limit > 0);
-    if numerator == 0 {
-        return 0;
-    }
-    if numerator >= denominator * limit as u128 {
-        return limit;
-    }
-
-    // A non-saturating result is below the 24-bit angular-velocity span.
-    // Shifting both operands to at most 63 bits therefore leaves at least
-    // 39 significant denominator bits before the native u64 division.
-    let numerator_bits = u128::BITS - numerator.leading_zeros();
-    let denominator_bits = u128::BITS - denominator.leading_zeros();
-    let shift = numerator_bits.max(denominator_bits).saturating_sub(63);
-    let scaled_numerator = (numerator >> shift) as u64;
-    let scaled_denominator = (denominator >> shift) as u64;
-    debug_assert!(scaled_denominator > 0);
-
-    div_round(scaled_numerator, scaled_denominator).min(limit)
 }
 
 #[cfg(test)]
@@ -409,28 +409,48 @@ mod tests {
     }
 
     #[test]
-    fn scaled_angular_division_tracks_full_width_reference() {
-        let velocity_changes = [1, 17, 1 << 10, 1 << 20, MAX_VELOCITY_CHANGE_RAW];
+    fn cached_angular_response_tracks_full_width_reference() {
+        let velocity_changes = [
+            -(MAX_VELOCITY_CHANGE_RAW as i64),
+            -(1 << 10),
+            -1,
+            1,
+            17,
+            1 << 10,
+            1 << 20,
+            MAX_VELOCITY_CHANGE_RAW as i64,
+        ];
         let inverse_inertias = [1, 1 << 24, 1 << 40, 6 << 40, u64::MAX];
-        let levers = [1_u64, 1 << 11, 1 << 16, 1 << 26, 1 << 31];
+        let levers = [
+            i32::MIN,
+            -(1 << 26),
+            -1,
+            1,
+            1 << 11,
+            1 << 16,
+            1 << 26,
+            i32::MAX,
+        ];
         let inverse_sums = [1, 1 << 16, 1 << 24, 1 << 32, 1 << 48, u64::MAX];
 
         for velocity_change in velocity_changes {
             for inverse_inertia in inverse_inertias {
                 for lever in levers {
                     for inverse_sum in inverse_sums {
-                        let numerator = velocity_change as u128
+                        let numerator = velocity_change.unsigned_abs() as u128
                             * inverse_inertia as u128
-                            * lever as u128;
+                            * lever.unsigned_abs() as u128;
                         let denominator = (inverse_sum as u128) << 26;
-                        let expected = ((numerator + (denominator >> 1)) / denominator)
+                        let expected_magnitude = ((numerator + (denominator >> 1)) / denominator)
                             .min(AngularVelocity::MAX_CHANGE as u128)
-                            as u64;
-                        let actual = div_round_scaled_u128(
-                            numerator,
-                            denominator,
-                            AngularVelocity::MAX_CHANGE,
-                        );
+                            as i64;
+                        let expected = if (velocity_change < 0) ^ (lever < 0) {
+                            -expected_magnitude
+                        } else {
+                            expected_magnitude
+                        };
+                        let response = angular_response_q24(inverse_inertia, lever, inverse_sum);
+                        let actual = angular_velocity_change_raw(velocity_change, response);
 
                         assert!(
                             actual.abs_diff(expected) <= 1,
@@ -441,6 +461,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn cached_angular_responses_double_impulse_state_size() {
+        assert_eq!(core::mem::size_of::<ContactImpulseState>(), 64);
     }
 
     #[test]
