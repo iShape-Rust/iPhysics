@@ -29,6 +29,7 @@ enum Scenario {
     OffCenterImpact,
     BoxStack,
     BoxPyramid,
+    DominoPyramid,
     CircleVsConvex,
     ConvexVsConvex,
     CompositePlayground,
@@ -42,7 +43,7 @@ enum Scenario {
 }
 
 impl Scenario {
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 22] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
@@ -54,6 +55,7 @@ impl Scenario {
         Self::OffCenterImpact,
         Self::BoxStack,
         Self::BoxPyramid,
+        Self::DominoPyramid,
         Self::CircleVsConvex,
         Self::ConvexVsConvex,
         Self::CompositePlayground,
@@ -79,6 +81,7 @@ impl Scenario {
             Self::OffCenterImpact => "Off-center impact",
             Self::BoxStack => "Box stack stability",
             Self::BoxPyramid => "Box pyramid (base 7)",
+            Self::DominoPyramid => "Domino pyramid (base 7)",
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
@@ -111,6 +114,9 @@ impl Scenario {
             }
             Self::BoxStack => "Six slightly rotated boxes test resting-contact stability.",
             Self::BoxPyramid => "Twenty-eight squares form a seven-row pyramid on a flat floor.",
+            Self::DominoPyramid => {
+                "Pi-shaped domino arches form a seven-row pyramid with seven arches at the base."
+            }
             Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
             Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
             Self::CompositePlayground => {
@@ -1154,31 +1160,8 @@ fn build_world(scenario: Scenario) -> World {
             }
             world
         }
-        Scenario::BoxPyramid => {
-            const BASE_COUNT: usize = 7;
-            const HALF_EXTENT: f64 = 0.32;
-            const SPACING: f64 = 0.68;
-            const BOTTOM_Y: f64 = -0.66;
-
-            let mut world = World::default();
-            let material = Material::new(0.0, 0.8).unwrap();
-            add_static(&mut world, flat_floor(1, material));
-            let square = rectangle(HALF_EXTENT, HALF_EXTENT);
-            let mut id = 2;
-            for row in 0..BASE_COUNT {
-                let count = BASE_COUNT - row;
-                let y = BOTTOM_Y + row as f64 * SPACING;
-                for column in 0..count {
-                    let x = (column as f64 - (count - 1) as f64 * 0.5) * SPACING;
-                    add(
-                        &mut world,
-                        dynamic_convex(id, x, y, Angle::ZERO, square, 0.0, 0.0, material),
-                    );
-                    id += 1;
-                }
-            }
-            world
-        }
+        Scenario::BoxPyramid => block_pyramid_world(0.32, 0.32, 0.68, 0.68),
+        Scenario::DominoPyramid => domino_pyramid_world(),
         Scenario::CircleVsConvex => {
             let mut world = zero_gravity_world();
             add(
@@ -1290,6 +1273,78 @@ fn build_world(scenario: Scenario) -> World {
             world
         }
     }
+}
+
+fn block_pyramid_world(
+    half_width: f64,
+    half_height: f64,
+    horizontal_spacing: f64,
+    vertical_spacing: f64,
+) -> World {
+    const BASE_COUNT: usize = 7;
+    const FLOOR_TOP: f64 = -1.0;
+    const INITIAL_GAP: f64 = 0.02;
+
+    let mut world = World::default();
+    let material = Material::new(0.0, 0.8).unwrap();
+    add_static(&mut world, flat_floor(1, material));
+    let block = rectangle(half_width, half_height);
+    let bottom_y = FLOOR_TOP + half_height + INITIAL_GAP;
+    let mut id = 2;
+    for row in 0..BASE_COUNT {
+        let count = BASE_COUNT - row;
+        let y = bottom_y + row as f64 * vertical_spacing;
+        for column in 0..count {
+            let x = (column as f64 - (count - 1) as f64 * 0.5) * horizontal_spacing;
+            add(
+                &mut world,
+                dynamic_convex(id, x, y, Angle::ZERO, block, 0.0, 0.0, material),
+            );
+            id += 1;
+        }
+    }
+    world
+}
+
+fn domino_pyramid_world() -> World {
+    const BASE_COUNT: usize = 7;
+    const DOMINO_LENGTH: f64 = 0.75;
+    const DOMINO_THICKNESS: f64 = 0.1875;
+    const FLOOR_TOP: f64 = -1.0;
+
+    let mut world = World::default();
+    let material = Material::new(0.0, 0.8).unwrap();
+    add_static(&mut world, flat_floor(1, material));
+
+    let vertical = rectangle(DOMINO_THICKNESS * 0.5, DOMINO_LENGTH * 0.5);
+    let horizontal = rectangle(DOMINO_LENGTH * 0.5, DOMINO_THICKNESS * 0.5);
+    let level_spacing = DOMINO_LENGTH + DOMINO_THICKNESS;
+    let bottom_leg_y = FLOOR_TOP + DOMINO_LENGTH * 0.5;
+    let beam_offset_y = (DOMINO_LENGTH + DOMINO_THICKNESS) * 0.5;
+    let mut id = 2;
+
+    for row in 0..BASE_COUNT {
+        let count = BASE_COUNT - row;
+        let leg_y = bottom_leg_y + row as f64 * level_spacing;
+        let beam_y = leg_y + beam_offset_y;
+        for support in 0..=count {
+            let x = (support as f64 - count as f64 * 0.5) * DOMINO_LENGTH;
+            add(
+                &mut world,
+                dynamic_convex(id, x, leg_y, Angle::ZERO, vertical, 0.0, 0.0, material),
+            );
+            id += 1;
+        }
+        for beam in 0..count {
+            let x = (beam as f64 - (count - 1) as f64 * 0.5) * DOMINO_LENGTH;
+            add(
+                &mut world,
+                dynamic_convex(id, x, beam_y, Angle::ZERO, horizontal, 0.0, 0.0, material),
+            );
+            id += 1;
+        }
+    }
+    world
 }
 
 fn deep_box_penetration_world() -> World {
@@ -1938,6 +1993,7 @@ mod tests {
             Scenario::OffCenterImpact,
             Scenario::BoxStack,
             Scenario::BoxPyramid,
+            Scenario::DominoPyramid,
             Scenario::CircleVsConvex,
             Scenario::ConvexVsConvex,
             Scenario::CompositePlayground,
@@ -1955,6 +2011,47 @@ mod tests {
     #[test]
     fn box_pyramid_has_seven_squares_at_its_base() {
         let world = build_world(Scenario::BoxPyramid);
+        assert_pyramid_layout(&world);
+    }
+
+    #[test]
+    fn domino_pyramid_has_seven_arches_at_its_base() {
+        let world = build_world(Scenario::DominoPyramid);
+        let material = Material::new(0.0, 0.8).unwrap();
+        assert_eq!(world.static_body_count(), 1);
+        assert_eq!(world.body_count(), 2 * (7 + 6 + 5 + 4 + 3 + 2 + 1) + 7);
+        assert_eq!(world.static_bodies()[0].material(), material);
+        assert!(
+            world
+                .bodies()
+                .iter()
+                .all(|body| body.material() == material)
+        );
+
+        let base_y = world.bodies()[0].state().transform().position.to_meters()[1];
+        let base_legs = world
+            .bodies()
+            .iter()
+            .filter(|body| body.state().transform().position.to_meters()[1] == base_y)
+            .count();
+        assert_eq!(base_legs, 8);
+
+        let body_aabb = |index: usize| {
+            let body = &world.bodies()[index];
+            body.collider().aabb(body.state().transform())
+        };
+        let floor = world.static_bodies()[0].aabb();
+        let first_leg = body_aabb(0);
+        let first_beam = body_aabb(8);
+        let second_beam = body_aabb(9);
+        let first_upper_leg = body_aabb(15);
+        assert_eq!(floor.max().raw()[1], first_leg.min().raw()[1]);
+        assert_eq!(first_leg.max().raw()[1], first_beam.min().raw()[1]);
+        assert_eq!(first_beam.max().raw()[0], second_beam.min().raw()[0]);
+        assert_eq!(first_beam.max().raw()[1], first_upper_leg.min().raw()[1]);
+    }
+
+    fn assert_pyramid_layout(world: &World) {
         let material = Material::new(0.0, 0.8).unwrap();
         assert_eq!(world.static_body_count(), 1);
         assert_eq!(world.body_count(), 7 + 6 + 5 + 4 + 3 + 2 + 1);

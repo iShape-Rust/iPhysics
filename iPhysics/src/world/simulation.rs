@@ -18,6 +18,8 @@ pub struct StepStats {
     pub sleeping_bodies: usize,
 }
 
+const MAX_SHOCK_ITERATIONS: u8 = 2;
+
 impl World {
     pub fn step(&mut self) -> StepStats {
         mouse_solver::wake_bodies(self);
@@ -29,6 +31,14 @@ impl World {
 
         let mut contact_constraints = contact_solver::prepare_constraints(self);
         contact_solver::prepare_warm_start(self, &mut contact_constraints);
+        let shock = contact_solver::prepare_shock_constraints(self, &contact_constraints);
+        let velocity_iterations = self.settings.velocity_iterations.max(1);
+        let shock_iterations = if shock.is_empty() {
+            0
+        } else {
+            MAX_SHOCK_ITERATIONS
+        };
+        let mut shock_accumulators = vec![0; shock.len()];
         let mut mouse_states =
             vec![mouse_solver::MouseImpulseState::default(); self.mouse_joints.len()];
         let mut distance_states =
@@ -36,15 +46,26 @@ impl World {
         let mut rope_states =
             vec![joint_solver::RopeImpulseState::default(); self.rope_joints.len()];
         let mut reverse = false;
-        for _ in 0..self.settings.velocity_iterations.max(1) {
+        for _ in 0..velocity_iterations {
             joint_solver::solve_distance_velocities(self, &mut distance_states, reverse);
             joint_solver::solve_rope_velocities(self, &mut rope_states, reverse);
             mouse_solver::solve_velocities(self, &mut mouse_states, reverse);
             contact_solver::solve_velocities(self, &mut contact_constraints, false);
             reverse = !reverse;
         }
+        // Keep the configured solver budget intact; shock propagation is a
+        // small directional refinement after the ordinary symmetric solve.
+        for _ in 0..shock_iterations {
+            contact_solver::solve_shock_velocities(
+                self,
+                &mut contact_constraints,
+                &shock,
+                &mut shock_accumulators,
+            );
+        }
+        contact_solver::apply_angular_support(self, &shock);
         contact_solver::rebuild_contact_cache(self, &contact_constraints);
-        contact_solver::correct_positions(self);
+        contact_solver::correct_positions(self, &shock);
         self.integrate_transforms();
         self.update_sleep_states(&mut stats);
 
