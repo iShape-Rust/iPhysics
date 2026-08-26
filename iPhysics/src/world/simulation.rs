@@ -27,8 +27,7 @@ impl World {
         let mut stats = self.build_contacts();
         contact_detection::wake_impacted_bodies(self);
 
-        let mut contact_states =
-            vec![contact_solver::ContactImpulseState::default(); self.active_contacts.len()];
+        let mut contact_constraints = vec![];
         let mut mouse_states =
             vec![mouse_solver::MouseImpulseState::default(); self.mouse_joints.len()];
         let mut distance_states =
@@ -36,11 +35,14 @@ impl World {
         let mut rope_states =
             vec![joint_solver::RopeImpulseState::default(); self.rope_joints.len()];
         let mut reverse = false;
-        for _ in 0..self.settings.velocity_iterations.max(1) {
+        for iteration in 0..self.settings.velocity_iterations.max(1) {
             joint_solver::solve_distance_velocities(self, &mut distance_states, reverse);
             joint_solver::solve_rope_velocities(self, &mut rope_states, reverse);
             mouse_solver::solve_velocities(self, &mut mouse_states, reverse);
-            contact_solver::solve_velocities(self, &mut contact_states);
+            if iteration == 0 {
+                contact_constraints = contact_solver::prepare_constraints(self);
+            }
+            contact_solver::solve_velocities(self, &mut contact_constraints, iteration == 0);
             reverse = !reverse;
         }
         contact_solver::correct_positions(self);

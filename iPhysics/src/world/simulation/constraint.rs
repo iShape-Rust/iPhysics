@@ -46,14 +46,36 @@ pub(super) fn relative_speed_along(
     point: GeometryPoint,
     axis: UnitVector,
 ) -> i32 {
+    let lever_a_q16 = contact_lever_cross_axis(a, point, axis);
+    let lever_b_q16 = b
+        .map(|body| contact_lever_cross_axis(body, point, axis))
+        .unwrap_or(0);
+    relative_speed_along_levers(a, b, axis, lever_a_q16, lever_b_q16)
+}
+
+#[inline(always)]
+pub(super) fn relative_speed_along_levers(
+    a: &Body,
+    b: Option<&Body>,
+    axis: UnitVector,
+    lever_a_q16: i32,
+    lever_b_q16: i32,
+) -> i32 {
     let av = a.state().linear_velocity();
     let bv = b
         .map(|body| body.state().linear_velocity())
         .unwrap_or(LinearVelocity::ZERO);
     let linear_speed = axis.dot(bv - av);
-    let angular_a = angular_contact_speed_raw(a, point, axis);
+    let angular_a = a
+        .state()
+        .angular_velocity()
+        .projected_point_speed_raw(lever_a_q16);
     let angular_b = b
-        .map(|body| angular_contact_speed_raw(body, point, axis))
+        .map(|body| {
+            body.state()
+                .angular_velocity()
+                .projected_point_speed_raw(lever_b_q16)
+        })
         .unwrap_or(0);
     let speed = linear_speed + angular_b as i64 - angular_a as i64;
     speed.clamp(
