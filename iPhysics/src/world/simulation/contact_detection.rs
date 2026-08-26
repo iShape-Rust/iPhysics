@@ -8,6 +8,7 @@ use crate::collision::CollisionSolver;
 use crate::geometry::Aabb;
 use crate::world::{ActiveContact, BroadPhase, ContactBodyIndex, World};
 use alloc::vec::Vec;
+use i_key_sort::sort::two_keys_cmp::TwoKeysAndCmpSort;
 
 const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
@@ -23,6 +24,7 @@ struct AabbProxy {
 pub(in crate::world) struct BroadPhaseScratch {
     proxies: Vec<AabbProxy>,
     grid: grid::Scratch,
+    contact_sort_buffer: Vec<ActiveContact>,
 }
 
 impl BroadPhaseScratch {
@@ -30,12 +32,14 @@ impl BroadPhaseScratch {
         Self {
             proxies: Vec::new(),
             grid: grid::Scratch::new(),
+            contact_sort_buffer: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
         self.proxies.clear();
         self.grid.clear();
+        self.contact_sort_buffer.clear();
     }
 }
 
@@ -54,7 +58,11 @@ impl World {
             collision_solver: CollisionSolver::new(),
         };
 
-        let stats = detector.detect(self.settings.broad_phase, &mut scratch.grid);
+        let stats = detector.detect(
+            self.settings.broad_phase,
+            &mut scratch.grid,
+            &mut scratch.contact_sort_buffer,
+        );
         scratch.clear();
         stats
     }
@@ -87,7 +95,12 @@ fn build_proxies(bodies: &[Body], static_bodies: &[StaticBody], proxies: &mut Ve
 }
 
 impl Detector<'_> {
-    fn detect(mut self, broad_phase: BroadPhase, grid_scratch: &mut grid::Scratch) -> StepStats {
+    fn detect(
+        mut self,
+        broad_phase: BroadPhase,
+        grid_scratch: &mut grid::Scratch,
+        contact_sort_buffer: &mut Vec<ActiveContact>,
+    ) -> StepStats {
         match broad_phase {
             BroadPhase::BruteForce => self.detect_brute_force(),
             BroadPhase::Grid(settings) => self.detect_grid(grid_scratch, settings),
@@ -97,7 +110,7 @@ impl Detector<'_> {
             BroadPhase::Auto(settings) => self.detect_grid(grid_scratch, settings),
         }
 
-        sort_top_down(self.active_contacts);
+        sort_top_down(self.active_contacts, contact_sort_buffer);
         self.stats.contacts = self.active_contacts.len();
         self.stats
     }
@@ -196,14 +209,14 @@ impl Detector<'_> {
     }
 }
 
-fn sort_top_down(active_contacts: &mut [ActiveContact]) {
-    active_contacts.sort_by(|a, b| {
-        let [ax, ay] = a.point.raw();
-        let [bx, by] = b.point.raw();
-        by.cmp(&ay)
-            .then_with(|| ax.cmp(&bx))
-            .then_with(|| a.body_a.cmp(&b.body_a))
-    });
+fn sort_top_down(active_contacts: &mut [ActiveContact], buffer: &mut Vec<ActiveContact>) {
+    active_contacts.sort_by_two_keys_then_by_and_buffer(
+        false,
+        buffer,
+        |contact| -contact.point.raw()[1],
+        |contact| contact.point.raw()[0],
+        |a, b| a.body_a.cmp(&b.body_a),
+    );
 }
 
 pub(super) fn wake_impacted_bodies(world: &mut World) {
@@ -308,7 +321,8 @@ mod tests {
             });
         }
 
-        sort_top_down(&mut world.active_contacts);
+        let mut buffer = Vec::new();
+        sort_top_down(&mut world.active_contacts, &mut buffer);
 
         let body_indices = world
             .active_contacts
