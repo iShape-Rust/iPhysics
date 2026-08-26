@@ -1,4 +1,4 @@
-use super::Contact;
+use super::{ColliderFeature, Contact};
 use crate::body::BodyId;
 use crate::collider::Circle;
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -70,6 +70,10 @@ fn collide_at(
         point: center_a.offset(normal, contact_offset),
         normal,
         penetration: Length::from_raw(penetration_raw),
+        feature_a: ColliderFeature::Circle,
+        feature_b: ColliderFeature::Circle,
+        part_a: None,
+        part_b: None,
     })
 }
 
@@ -98,17 +102,15 @@ mod tests {
     #[test]
     fn separated_circles_do_not_collide() {
         let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
-        assert!(
-            collide(
-                BodyId::new(1),
-                circle,
-                Position::ZERO,
-                BodyId::new(2),
-                circle,
-                Position::from_meters(2.01, 0.0).unwrap(),
-            )
-            .is_none()
-        );
+        assert!(collide(
+            BodyId::new(1),
+            circle,
+            Position::ZERO,
+            BodyId::new(2),
+            circle,
+            Position::from_meters(2.01, 0.0).unwrap(),
+        )
+        .is_none());
     }
 
     #[test]

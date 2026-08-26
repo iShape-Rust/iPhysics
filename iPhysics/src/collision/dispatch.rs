@@ -1,4 +1,4 @@
-use super::{ContactManifold, circle_circle, circle_convex, convex_convex};
+use super::{circle_circle, circle_convex, convex_convex, ContactManifold};
 use crate::body::BodyId;
 use crate::collider::{Collider, SimpleCollider, TransformedVertices};
 use crate::transform::Transform;
@@ -38,9 +38,9 @@ impl CollisionSolver {
 
         match (collider_a, collider_b) {
             (Collider::Composite(a), Collider::Composite(b)) => {
-                for &simple_a in a.simple_colliders() {
+                for (part_a, &simple_a) in a.simple_colliders().iter().enumerate() {
                     let aabb_a = simple_a.aabb(transform_a);
-                    for &simple_b in b.simple_colliders() {
+                    for (part_b, &simple_b) in b.simple_colliders().iter().enumerate() {
                         if aabb_a.intersects(simple_b.aabb(transform_b)) {
                             self.collide_simple(
                                 body_a,
@@ -49,6 +49,8 @@ impl CollisionSolver {
                                 body_b,
                                 simple_b,
                                 transform_b,
+                                Some(part_a),
+                                Some(part_b),
                                 &mut emit,
                             );
                         }
@@ -58,7 +60,7 @@ impl CollisionSolver {
             (Collider::Composite(a), b) => {
                 let simple_b = Self::as_simple(b);
                 let aabb_b = simple_b.aabb(transform_b);
-                for &simple_a in a.simple_colliders() {
+                for (part_a, &simple_a) in a.simple_colliders().iter().enumerate() {
                     if simple_a.aabb(transform_a).intersects(aabb_b) {
                         self.collide_simple(
                             body_a,
@@ -67,6 +69,8 @@ impl CollisionSolver {
                             body_b,
                             simple_b,
                             transform_b,
+                            Some(part_a),
+                            None,
                             &mut emit,
                         );
                     }
@@ -75,7 +79,7 @@ impl CollisionSolver {
             (a, Collider::Composite(b)) => {
                 let simple_a = Self::as_simple(a);
                 let aabb_a = simple_a.aabb(transform_a);
-                for &simple_b in b.simple_colliders() {
+                for (part_b, &simple_b) in b.simple_colliders().iter().enumerate() {
                     if aabb_a.intersects(simple_b.aabb(transform_b)) {
                         self.collide_simple(
                             body_a,
@@ -84,6 +88,8 @@ impl CollisionSolver {
                             body_b,
                             simple_b,
                             transform_b,
+                            None,
+                            Some(part_b),
                             &mut emit,
                         );
                     }
@@ -96,6 +102,8 @@ impl CollisionSolver {
                 body_b,
                 Self::as_simple(b),
                 transform_b,
+                None,
+                None,
                 &mut emit,
             ),
         }
@@ -121,6 +129,8 @@ impl CollisionSolver {
         body_b: BodyId,
         collider_b: SimpleCollider,
         transform_b: Transform,
+        part_a: Option<usize>,
+        part_b: Option<usize>,
         emit: &mut impl FnMut(ContactManifold),
     ) {
         let manifold = match (collider_a, collider_b) {
@@ -167,7 +177,7 @@ impl CollisionSolver {
         };
 
         if let Some(manifold) = manifold {
-            emit(manifold);
+            emit(manifold.with_parts(part_a, part_b));
         }
     }
 }
@@ -198,6 +208,7 @@ fn collide(
 mod tests {
     use super::*;
     use crate::collider::{Circle, CompositeCollider, Convex};
+    use crate::collision::ColliderFeature;
     use crate::quantity::{Angle, Length, Position};
     use alloc::vec;
 
@@ -212,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_and_convex_generate_contact_without_shape_identity() {
+    fn circle_and_convex_generate_topological_features() {
         let mut contact = None;
         collide(
             BodyId::new(1),
@@ -230,6 +241,43 @@ mod tests {
         assert_eq!(contact.body_a, BodyId::new(1));
         assert_eq!(contact.body_b, BodyId::new(2));
         assert!(contact.penetration.raw() > 0);
+        assert_eq!(contact.feature_a, ColliderFeature::Circle);
+        assert!(matches!(
+            contact.feature_b,
+            ColliderFeature::ConvexVertex(_) | ColliderFeature::ConvexEdge(_)
+        ));
+    }
+
+    #[test]
+    fn convex_manifold_features_are_stable_under_translation() {
+        let contacts = |offset: f64| {
+            let mut result = alloc::vec::Vec::new();
+            collide(
+                BodyId::new(1),
+                &square().into(),
+                Transform::new(Position::from_meters(offset, -3.0).unwrap(), Angle::ZERO),
+                BodyId::new(2),
+                &square().into(),
+                Transform::new(
+                    Position::from_meters(offset + 2.0, -3.0).unwrap(),
+                    Angle::ZERO,
+                ),
+                |manifold| {
+                    result.extend(
+                        manifold
+                            .into_contacts()
+                            .map(|contact| (contact.feature_a, contact.feature_b)),
+                    )
+                },
+            );
+            result
+        };
+
+        let first = contacts(0.0);
+        let shifted = contacts(7.0);
+        assert_eq!(first, shifted);
+        assert_eq!(first.len(), 2);
+        assert_ne!(first[0], first[1]);
     }
 
     #[test]
@@ -262,7 +310,7 @@ mod tests {
         };
         let a: Collider = composite(0.0).into();
         let b: Collider = composite(0.75).into();
-        let mut manifolds = 0;
+        let mut parts = alloc::vec::Vec::new();
 
         collide(
             BodyId::new(1),
@@ -271,9 +319,12 @@ mod tests {
             BodyId::new(2),
             &b,
             Transform::IDENTITY,
-            |_| manifolds += 1,
+            |manifold| {
+                let contact = manifold.first();
+                parts.push((contact.part_a, contact.part_b));
+            },
         );
 
-        assert_eq!(manifolds, 2);
+        assert_eq!(parts, [(Some(0), Some(0)), (Some(1), Some(1))]);
     }
 }

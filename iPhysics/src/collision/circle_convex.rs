@@ -1,4 +1,4 @@
-use super::Contact;
+use super::{ColliderFeature, Contact};
 use crate::body::BodyId;
 use crate::collider::{Circle, Convex, TransformedVertices};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -69,6 +69,7 @@ pub(super) fn collide_with_scratch(
             -best_normal,
             (radius - best_separation) as u32,
             circle.radius().raw(),
+            ColliderFeature::ConvexEdge(best_index as u8),
         ));
     }
 
@@ -80,6 +81,7 @@ pub(super) fn collide_with_scratch(
             circle_center,
             a,
             circle.radius().raw(),
+            best_index as u8,
         )
     } else if edge.dot(circle_center - b) >= 0 {
         vertex_contact(
@@ -88,6 +90,7 @@ pub(super) fn collide_with_scratch(
             circle_center,
             b,
             circle.radius().raw(),
+            ((best_index + 1) % vertices.len()) as u8,
         )
     } else {
         Some(build_contact(
@@ -97,6 +100,7 @@ pub(super) fn collide_with_scratch(
             -best_normal,
             (radius - best_separation) as u32,
             circle.radius().raw(),
+            ColliderFeature::ConvexEdge(best_index as u8),
         ))
     }
 }
@@ -107,6 +111,7 @@ fn vertex_contact(
     circle_center: GeometryPoint,
     vertex: GeometryPoint,
     radius: u32,
+    vertex_index: u8,
 ) -> Option<Contact> {
     let delta = vertex - circle_center;
     let distance_squared = delta.squared_magnitude();
@@ -124,6 +129,7 @@ fn vertex_contact(
         normal,
         (radius - distance) as u32,
         radius as u32,
+        ColliderFeature::ConvexVertex(vertex_index),
     ))
 }
 
@@ -134,6 +140,7 @@ fn build_contact(
     normal: UnitVector,
     penetration: u32,
     radius: u32,
+    convex_feature: ColliderFeature,
 ) -> Contact {
     let contact_offset = radius as i32 - (penetration / 2) as i32;
     Contact {
@@ -142,6 +149,10 @@ fn build_contact(
         point: circle_center.offset(normal, contact_offset),
         normal,
         penetration: Length::from_raw(penetration),
+        feature_a: ColliderFeature::Circle,
+        feature_b: convex_feature,
+        part_a: None,
+        part_b: None,
     }
 }
 

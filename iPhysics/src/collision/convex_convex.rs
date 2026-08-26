@@ -1,4 +1,4 @@
-use super::{Contact, ContactManifold};
+use super::{ColliderFeature, Contact, ContactManifold};
 use crate::body::BodyId;
 use crate::collider::{Convex, TransformedVertices};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -120,12 +120,22 @@ pub(super) fn collide_with_scratch(
     let incident_interval = segment_interval(incident_edge, tangent);
     let tangent_min = reference_interval.0.max(incident_interval.0);
     let tangent_max = reference_interval.1.min(incident_interval.1);
-    let contact = |point: GeometryPoint| Contact {
-        body_a,
-        body_b,
-        point,
-        normal,
-        penetration: Length::from_raw(penetration),
+    let contact = |candidate: ContactCandidate| {
+        let (feature_a, feature_b) = match source {
+            AxisSource::A => (candidate.reference_feature, candidate.incident_feature),
+            AxisSource::B => (candidate.incident_feature, candidate.reference_feature),
+        };
+        Contact {
+            body_a,
+            body_b,
+            point: candidate.point,
+            normal,
+            penetration: Length::from_raw(penetration),
+            feature_a,
+            feature_b,
+            part_a: None,
+            part_b: None,
+        }
     };
 
     // Intersection implies overlap on every projection axis. Fixed-point
@@ -140,7 +150,7 @@ pub(super) fn collide_with_scratch(
             reference_outward,
             tangent_projection,
         );
-        return Some(ContactManifold::one(contact(candidate.point)));
+        return Some(ContactManifold::one(contact(candidate)));
     }
 
     let first = contact_candidate(
@@ -151,7 +161,7 @@ pub(super) fn collide_with_scratch(
         tangent_min,
     );
     if tangent_min == tangent_max {
-        return Some(ContactManifold::one(contact(first.point)));
+        return Some(ContactManifold::one(contact(first)));
     }
     let second = contact_candidate(
         reference_edge,
@@ -161,14 +171,11 @@ pub(super) fn collide_with_scratch(
         tangent_max,
     );
     if first.separation <= MANIFOLD_SLOP_RAW && second.separation <= MANIFOLD_SLOP_RAW {
-        Some(ContactManifold::two(
-            contact(first.point),
-            contact(second.point),
-        ))
+        Some(ContactManifold::two(contact(first), contact(second)))
     } else if first.separation <= second.separation {
-        Some(ContactManifold::one(contact(first.point)))
+        Some(ContactManifold::one(contact(first)))
     } else {
-        Some(ContactManifold::one(contact(second.point)))
+        Some(ContactManifold::one(contact(second)))
     }
 }
 
@@ -219,6 +226,15 @@ fn project(vertices: &[GeometryPoint], axis: UnitVector) -> (i64, i64) {
 struct ContactCandidate {
     point: GeometryPoint,
     separation: i64,
+    reference_feature: ColliderFeature,
+    incident_feature: ColliderFeature,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SupportingEdge {
+    points: [GeometryPoint; 2],
+    edge_index: u8,
+    next_index: u8,
 }
 
 fn supporting_edge(
@@ -227,7 +243,7 @@ fn supporting_edge(
     angle: Angle,
     reference_outward: UnitVector,
     most_aligned: bool,
-) -> [GeometryPoint; 2] {
+) -> SupportingEdge {
     let score = |normal: UnitVector| {
         let [ax, ay] = reference_outward.raw();
         let [bx, by] = normal.rotate(angle).raw();
@@ -245,28 +261,47 @@ fn supporting_edge(
         }
     }
 
-    [vertices[edge], vertices[(edge + 1) % vertices.len()]]
+    let next = (edge + 1) % vertices.len();
+    SupportingEdge {
+        points: [vertices[edge], vertices[next]],
+        edge_index: edge as u8,
+        next_index: next as u8,
+    }
 }
 
 #[inline(always)]
-fn segment_interval(segment: [GeometryPoint; 2], axis: UnitVector) -> (i64, i64) {
-    let a = axis.dot(segment[0].into());
-    let b = axis.dot(segment[1].into());
+fn segment_interval(segment: SupportingEdge, axis: UnitVector) -> (i64, i64) {
+    let a = axis.dot(segment.points[0].into());
+    let b = axis.dot(segment.points[1].into());
     (a.min(b), a.max(b))
 }
 
 fn contact_candidate(
-    reference: [GeometryPoint; 2],
-    incident: [GeometryPoint; 2],
+    reference: SupportingEdge,
+    incident: SupportingEdge,
     tangent: UnitVector,
     reference_outward: UnitVector,
     tangent_projection: i64,
 ) -> ContactCandidate {
-    let reference_point = point_on_segment(reference, tangent, tangent_projection);
-    let incident_point = point_on_segment(incident, tangent, tangent_projection);
+    let reference_point = point_on_segment(reference.points, tangent, tangent_projection);
+    let incident_point = point_on_segment(incident.points, tangent, tangent_projection);
     ContactCandidate {
         point: reference_point.midpoint(incident_point),
         separation: reference_outward.dot(incident_point - reference_point),
+        reference_feature: segment_feature(reference, tangent, tangent_projection),
+        incident_feature: segment_feature(incident, tangent, tangent_projection),
+    }
+}
+
+fn segment_feature(segment: SupportingEdge, axis: UnitVector, projection: i64) -> ColliderFeature {
+    let projection_a = axis.dot(segment.points[0].into());
+    let projection_b = axis.dot(segment.points[1].into());
+    if projection_a != projection_b && projection == projection_a {
+        ColliderFeature::ConvexVertex(segment.edge_index)
+    } else if projection_a != projection_b && projection == projection_b {
+        ColliderFeature::ConvexVertex(segment.next_index)
+    } else {
+        ColliderFeature::ConvexEdge(segment.edge_index)
     }
 }
 

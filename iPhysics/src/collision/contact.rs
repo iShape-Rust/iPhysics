@@ -2,12 +2,6 @@ use crate::body::BodyId;
 use crate::geometry::{GeometryPoint, UnitVector};
 use crate::quantity::Length;
 
-/// Stateless geometric result generated for the current tick only.
-///
-/// A contact deliberately carries no collider variant, composite part index,
-/// or persistent feature identity. Narrow phase discards that information
-/// before handing the result to the solver.
-///
 /// `normal` points from `body_a` toward `body_b`; the solver response applied
 /// to `body_a` therefore acts in the opposite direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +11,17 @@ pub struct Contact {
     pub point: GeometryPoint,
     pub normal: UnitVector,
     pub penetration: Length,
+    pub(crate) feature_a: ColliderFeature,
+    pub(crate) feature_b: ColliderFeature,
+    pub(crate) part_a: Option<usize>,
+    pub(crate) part_b: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum ColliderFeature {
+    Circle,
+    ConvexVertex(u8),
+    ConvexEdge(u8),
 }
 
 impl Contact {
@@ -27,8 +32,19 @@ impl Contact {
             body_a: self.body_b,
             body_b: self.body_a,
             normal: -self.normal,
+            feature_a: self.feature_b,
+            feature_b: self.feature_a,
+            part_a: self.part_b,
+            part_b: self.part_a,
             ..self
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_parts(mut self, part_a: Option<usize>, part_b: Option<usize>) -> Self {
+        self.part_a = part_a;
+        self.part_b = part_b;
+        self
     }
 }
 
@@ -68,5 +84,15 @@ impl ContactManifold {
     #[inline(always)]
     pub(crate) fn into_contacts(self) -> impl Iterator<Item = Contact> {
         [Some(self.first), self.second].into_iter().flatten()
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_parts(self, part_a: Option<usize>, part_b: Option<usize>) -> Self {
+        Self {
+            first: self.first.with_parts(part_a, part_b),
+            second: self
+                .second
+                .map(|contact| contact.with_parts(part_a, part_b)),
+        }
     }
 }

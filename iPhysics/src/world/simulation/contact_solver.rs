@@ -1,9 +1,10 @@
 use super::constraint::{
-    MAX_RELATIVE_CONTACT_SPEED_RAW, add_angular_velocity, add_position, add_velocity,
-    contact_inverse_mass_q24, contact_lever_cross_axis, relative_speed_along_levers,
-    two_bodies_mut,
+    add_angular_velocity, add_position, add_velocity, contact_inverse_mass_q24,
+    contact_lever_cross_axis, relative_speed_along_levers, two_bodies_mut,
+    MAX_RELATIVE_CONTACT_SPEED_RAW,
 };
 use crate::body::Body;
+use crate::world::contact_cache::{ContactIdentity, HotContact, HotContacts};
 use crate::world::{ActiveContact, ContactBodyIndex, World};
 use crate::{AngularVelocity, UnitVector};
 use alloc::vec::Vec;
@@ -11,6 +12,7 @@ use alloc::vec::Vec;
 const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
+const MAX_ACCUMULATED_NORMAL_RAW: u64 = (u8::MAX as u64 + 1) * MAX_VELOCITY_CHANGE_RAW;
 const ANGULAR_RESPONSE_FRACTION_BITS: u32 = 17;
 const MAX_ANGULAR_RESPONSE_Q17: u64 = AngularVelocity::MAX_CHANGE << ANGULAR_RESPONSE_FRACTION_BITS;
 const LINEAR_RESPONSE_FRACTION_BITS: u32 = 31;
@@ -133,18 +135,152 @@ pub(super) fn solve_velocities(
     initialize_targets: bool,
 ) {
     debug_assert_eq!(constraints.len(), world.active_contacts.len());
+    if initialize_targets {
+        initialize_restitution_targets(world, constraints);
+    }
 
     for (index, constraint) in constraints.iter_mut().enumerate() {
-        solve_velocity(world, index, constraint, initialize_targets);
+        solve_velocity(world, index, constraint);
     }
 }
 
-fn solve_velocity(
-    world: &mut World,
-    index: usize,
-    constraint: &mut ContactConstraint,
-    initialize_target: bool,
+pub(super) fn prepare_warm_start(world: &mut World, constraints: &mut [ContactConstraint]) {
+    debug_assert_eq!(constraints.len(), world.active_contacts.len());
+    initialize_restitution_targets(world, constraints);
+
+    for (index, constraint) in constraints.iter_mut().enumerate() {
+        if constraint.normal_target_speed_q10 != 0 {
+            continue;
+        }
+        let contact = world.active_contacts[index];
+        let identity = contact_identity(world, contact);
+        let cached = world.hot_contacts[contact.body_a]
+            .find(identity)
+            .or_else(|| match contact.body_b {
+                ContactBodyIndex::Dynamic(index_b) => world.hot_contacts[index_b].find(identity),
+                ContactBodyIndex::Static(_) => None,
+            });
+        if let Some(cached) = cached {
+            constraint.normal_velocity_change_q10 = cached.normal_velocity_change_q10;
+            let tangent_limit = friction_velocity_change_limit_q10(
+                cached.normal_velocity_change_q10,
+                constraint.friction_response_q31,
+            );
+            constraint.tangent_velocity_change_q10 = cached
+                .tangent_velocity_change_q10
+                .clamp(-tangent_limit, tangent_limit);
+        }
+    }
+
+    for (index, constraint) in constraints.iter().enumerate() {
+        apply_cached_velocity(world, index, constraint);
+    }
+}
+
+pub(super) fn rebuild_contact_cache(world: &mut World, constraints: &[ContactConstraint]) {
+    debug_assert_eq!(constraints.len(), world.active_contacts.len());
+    let mut next = alloc::vec![HotContacts::EMPTY; world.bodies.len()];
+    for (index, constraint) in constraints.iter().copied().enumerate() {
+        if constraint.normal_target_speed_q10 != 0 || constraint.normal_velocity_change_q10 == 0 {
+            continue;
+        }
+        let contact = world.active_contacts[index];
+        let hot = HotContact {
+            identity: contact_identity(world, contact),
+            normal_velocity_change_q10: constraint.normal_velocity_change_q10,
+            tangent_velocity_change_q10: constraint.tangent_velocity_change_q10,
+        };
+        next[contact.body_a].insert(hot);
+        if let ContactBodyIndex::Dynamic(index_b) = contact.body_b {
+            next[index_b].insert(hot);
+        }
+    }
+    world.hot_contacts = next;
+}
+
+fn initialize_restitution_targets(world: &World, constraints: &mut [ContactConstraint]) {
+    for (index, constraint) in constraints.iter_mut().enumerate() {
+        let contact = world.active_contacts[index];
+        let a = &world.bodies[contact.body_a];
+        let b = match contact.body_b {
+            ContactBodyIndex::Dynamic(index_b) => Some(&world.bodies[index_b]),
+            ContactBodyIndex::Static(_) => None,
+        };
+        let normal_speed = relative_speed_along_levers(
+            a,
+            b,
+            contact.normal,
+            constraint.normal.lever_a_q16,
+            constraint.normal.lever_b_q16,
+        );
+        constraint.normal_target_speed_q10 =
+            restitution_target_speed(normal_speed, constraint.restitution_q16) as u32;
+    }
+}
+
+fn contact_identity(world: &World, contact: ActiveContact) -> ContactIdentity {
+    let body_b = match contact.body_b {
+        ContactBodyIndex::Dynamic(index_b) => world.bodies[index_b].id(),
+        ContactBodyIndex::Static(index_b) => world.static_bodies[index_b].id(),
+    };
+    ContactIdentity {
+        body_a: world.bodies[contact.body_a].id(),
+        body_b,
+        part_a: contact.part_a,
+        part_b: contact.part_b,
+        feature_a: contact.feature_a,
+        feature_b: contact.feature_b,
+    }
+}
+
+fn apply_cached_velocity(world: &mut World, index: usize, constraint: &ContactConstraint) {
+    if constraint.normal_velocity_change_q10 == 0 && constraint.tangent_velocity_change_q10 == 0 {
+        return;
+    }
+    let contact = world.active_contacts[index];
+    match contact.body_b {
+        ContactBodyIndex::Static(_) => apply_cached_contact_velocity(
+            &mut world.bodies[contact.body_a],
+            None,
+            &contact,
+            constraint,
+        ),
+        ContactBodyIndex::Dynamic(index_b) => {
+            let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
+            apply_cached_contact_velocity(a, Some(b), &contact, constraint);
+        }
+    }
+}
+
+fn apply_cached_contact_velocity(
+    a: &mut Body,
+    mut b: Option<&mut Body>,
+    contact: &ActiveContact,
+    constraint: &ContactConstraint,
 ) {
+    apply_contact_impulse(
+        a,
+        b.as_deref_mut(),
+        contact.normal,
+        constraint.normal_velocity_change_q10 as i64,
+        constraint.normal.linear_response_a_q31,
+        constraint.normal.linear_response_b_q31,
+        constraint.normal.angular_response_a_q17,
+        constraint.normal.angular_response_b_q17,
+    );
+    apply_contact_impulse(
+        a,
+        b,
+        contact.normal.perpendicular(),
+        constraint.tangent_velocity_change_q10,
+        constraint.tangent.linear_response_a_q31,
+        constraint.tangent.linear_response_b_q31,
+        constraint.tangent.angular_response_a_q17,
+        constraint.tangent.angular_response_b_q17,
+    );
+}
+
+fn solve_velocity(world: &mut World, index: usize, constraint: &mut ContactConstraint) {
     let contact = world.active_contacts[index];
     match contact.body_b {
         ContactBodyIndex::Static(_) => {
@@ -153,12 +289,11 @@ fn solve_velocity(
                 None,
                 &contact,
                 constraint,
-                initialize_target,
             );
         }
         ContactBodyIndex::Dynamic(index_b) => {
             let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            solve_contact_velocity(a, Some(b), &contact, constraint, initialize_target);
+            solve_contact_velocity(a, Some(b), &contact, constraint);
         }
     }
 }
@@ -214,7 +349,6 @@ fn solve_contact_velocity(
     mut b: Option<&mut Body>,
     contact: &ActiveContact,
     constraint: &mut ContactConstraint,
-    initialize_target: bool,
 ) {
     let normal = contact.normal;
     if constraint.normal.inverse_sum_q24 == 0 {
@@ -228,10 +362,6 @@ fn solve_contact_velocity(
         constraint.normal.lever_a_q16,
         constraint.normal.lever_b_q16,
     );
-    if initialize_target {
-        constraint.normal_target_speed_q10 =
-            restitution_target_speed(normal_speed, constraint.restitution_q16) as u32;
-    }
     let previous_normal = constraint.normal_velocity_change_q10;
     let candidate_normal =
         previous_normal as i64 + constraint.normal_target_speed_q10 as i64 - normal_speed as i64;
@@ -307,7 +437,7 @@ fn apply_contact_impulse(
         axis = -axis;
     }
     let magnitude = impulse_numerator_q10.unsigned_abs();
-    debug_assert!(magnitude <= MAX_VELOCITY_CHANGE_RAW);
+    debug_assert!(magnitude <= MAX_ACCUMULATED_NORMAL_RAW.max(MAX_TANGENT_ACCUMULATOR_RAW));
     let change_a = linear_velocity_change_raw(magnitude, linear_response_a_q31);
     if change_a != 0 {
         let [change_x, change_y] = axis.scaled_wide_raw(change_a);
@@ -386,7 +516,11 @@ fn angular_response_q17(inverse_inertia_q40: u64, lever_q16: i32, inverse_sum_q2
     let denominator = (inverse_sum_q24 as u128) << (26 - ANGULAR_RESPONSE_FRACTION_BITS);
     let magnitude = ((numerator + (denominator >> 1)) / denominator)
         .min(MAX_ANGULAR_RESPONSE_Q17 as u128) as i64;
-    if lever_q16 < 0 { -magnitude } else { magnitude }
+    if lever_q16 < 0 {
+        -magnitude
+    } else {
+        magnitude
+    }
 }
 
 #[inline(always)]
@@ -399,7 +533,11 @@ fn angular_velocity_change_raw(velocity_change_q10: i64, angular_response_q17: i
     let product = velocity_change_q10.unsigned_abs() * angular_response_q17.unsigned_abs();
     let magnitude = round_shift(product, ANGULAR_RESPONSE_FRACTION_BITS)
         .min(AngularVelocity::MAX_CHANGE) as i64;
-    if negative { -magnitude } else { magnitude }
+    if negative {
+        -magnitude
+    } else {
+        magnitude
+    }
 }
 
 #[inline(always)]
@@ -484,6 +622,10 @@ mod tests {
             normal,
             penetration: Length::ZERO,
             correct_position: true,
+            feature_a: crate::collision::ColliderFeature::Circle,
+            feature_b: crate::collision::ColliderFeature::Circle,
+            part_a: None,
+            part_b: None,
         }
     }
 
@@ -554,11 +696,9 @@ mod tests {
 
     #[test]
     fn cached_q17_angular_response_tracks_full_width_reference() {
-        assert!(
-            MAX_VELOCITY_CHANGE_RAW
-                .checked_mul(MAX_ANGULAR_RESPONSE_Q17)
-                .is_some()
-        );
+        assert!(MAX_VELOCITY_CHANGE_RAW
+            .checked_mul(MAX_ANGULAR_RESPONSE_Q17)
+            .is_some());
         let velocity_changes = [
             -(MAX_VELOCITY_CHANGE_RAW as i64),
             -(1 << 10),
@@ -648,6 +788,8 @@ mod tests {
                 .to_meters_per_second(),
             [1.0, 0.0]
         );
+        assert_eq!(world.hot_contacts[0].len(), 0);
+        assert_eq!(world.hot_contacts[1].len(), 0);
     }
 
     #[test]
@@ -721,6 +863,79 @@ mod tests {
             *world.body(BodyId::new(1)).unwrap().state(),
             after_first_solve
         );
+    }
+
+    #[test]
+    fn final_tangent_accumulator_is_persisted() {
+        let material = Material::new(0.0, 1.0).unwrap();
+        let mut body = circle_body(1, 0.0, 1.0, material);
+        body.state_mut()
+            .set_linear_velocity(LinearVelocity::from_meters_per_second(1.0, -1.0).unwrap());
+        let mut world = zero_gravity_world();
+        world.add_body(body).unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::new(Position::from_meters(0.0, -1.0).unwrap(), Angle::ZERO),
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                material,
+            ))
+            .unwrap();
+
+        world.step();
+
+        assert_eq!(world.hot_contacts[0].len(), 1);
+        assert!(world.hot_contacts[0].has_tangent());
+    }
+
+    #[test]
+    fn convex_stack_is_stable_with_one_velocity_iteration() {
+        let settings = WorldSettings {
+            velocity_iterations: 1,
+            linear_damping: Damping::NONE,
+            angular_damping: Damping::NONE,
+            sleep: crate::body::SleepConfig::from_raw(0, 0, u8::MAX),
+            ..WorldSettings::default()
+        };
+        let mut world = World::new(settings);
+        for (id, y) in [(1, 0.5), (2, 1.5), (3, 2.5), (4, 3.5)] {
+            world
+                .add_body(Body::dynamic(
+                    BodyId::new(id),
+                    rectangle(0.5, 0.5),
+                    Mass::ONE,
+                    Material::INELASTIC,
+                    BodyState::new(
+                        Transform::new(Position::from_meters(0.0, y).unwrap(), Angle::ZERO),
+                        LinearVelocity::ZERO,
+                        AngularVelocity::ZERO,
+                    ),
+                ))
+                .unwrap();
+        }
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(100),
+                Transform::new(Position::from_meters(0.0, -0.5).unwrap(), Angle::ZERO),
+                rectangle(5.0, 0.5),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+
+        for _ in 0..192 {
+            world.step();
+        }
+
+        for (index, body) in world.bodies().iter().enumerate() {
+            let expected_y = index as f64 + 0.5;
+            let actual_y = body.state().transform().position.to_meters()[1];
+            let vertical_speed = body.state().linear_velocity().to_meters_per_second()[1].abs();
+            assert!(
+                (actual_y - expected_y).abs() < 0.06,
+                "body {index}: y={actual_y}"
+            );
+            assert!(vertical_speed < 0.5, "body {index}: vy={vertical_speed}");
+        }
     }
 
     #[test]

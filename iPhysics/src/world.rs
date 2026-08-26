@@ -1,12 +1,14 @@
+mod contact_cache;
 mod settings;
 mod simulation;
 
 use crate::body::{Body, BodyId, StaticBody};
-use crate::collision::Contact;
+use crate::collision::{ColliderFeature, Contact};
 use crate::geometry::{GeometryPoint, UnitVector};
 use crate::joint::{DistanceJoint, MouseJoint, RopeJoint};
 use crate::quantity::Length;
 use alloc::vec::Vec;
+use contact_cache::HotContacts;
 use core::{fmt, iter::FusedIterator, slice};
 
 pub use settings::{BroadPhase, GridBroadPhase, WorldSettings};
@@ -46,6 +48,7 @@ pub struct World {
     distance_joints: Vec<DistanceJoint>,
     rope_joints: Vec<RopeJoint>,
     broad_phase_scratch: BroadPhaseScratch,
+    hot_contacts: Vec<HotContacts>,
 }
 
 /// Solver contact using direct indices into the world's body storage.
@@ -58,6 +61,10 @@ pub(crate) struct ActiveContact {
     pub(crate) penetration: Length,
     /// Position correction is shared by all points in one manifold.
     pub(crate) correct_position: bool,
+    pub(crate) feature_a: ColliderFeature,
+    pub(crate) feature_b: ColliderFeature,
+    pub(crate) part_a: Option<usize>,
+    pub(crate) part_b: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +140,10 @@ impl<'a> Contacts<'a> {
             point: active.point,
             normal: active.normal,
             penetration: active.penetration,
+            feature_a: active.feature_a,
+            feature_b: active.feature_b,
+            part_a: active.part_a,
+            part_b: active.part_b,
         }
     }
 }
@@ -149,6 +160,7 @@ impl World {
             distance_joints: Vec::new(),
             rope_joints: Vec::new(),
             broad_phase_scratch: BroadPhaseScratch::new(),
+            hot_contacts: Vec::new(),
         }
     }
 
@@ -299,6 +311,7 @@ impl World {
             Ok(_) => Err(AddBodyError::DuplicateId(body.id())),
             Err(index) => {
                 self.bodies.insert(index, body);
+                self.hot_contacts.insert(index, HotContacts::EMPTY);
                 self.clear_contacts();
                 Ok(())
             }
@@ -328,6 +341,7 @@ impl World {
         let index = self.bodies.binary_search_by_key(&id, Body::id).ok()?;
         self.remove_joints_for_body(id);
         let body = self.bodies.remove(index);
+        self.hot_contacts.remove(index);
         self.clear_contacts();
         Some(body)
     }
@@ -431,6 +445,7 @@ impl World {
 
     fn clear_contacts(&mut self) {
         self.active_contacts.clear();
+        self.hot_contacts.fill(HotContacts::EMPTY);
     }
 
     fn validate_joint_pair(&self, body_a: BodyId, body_b: BodyId) -> Result<(), AddJointError> {
@@ -482,7 +497,11 @@ impl World {
 
 #[inline(always)]
 fn canonical_pair(a: BodyId, b: BodyId) -> (BodyId, BodyId) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 impl Default for World {
@@ -565,6 +584,18 @@ mod tests {
             BodyId::new(2)
         );
         assert!(world.body(BodyId::new(2)).is_none());
+    }
+
+    #[test]
+    fn hot_contact_storage_tracks_body_lifecycle() {
+        let mut world = world();
+        world.add_body(circle_body(9)).unwrap();
+        world.add_body(circle_body(2)).unwrap();
+        assert_eq!(world.hot_contacts.len(), world.bodies.len());
+
+        world.remove_body(BodyId::new(2)).unwrap();
+        assert_eq!(world.hot_contacts.len(), world.bodies.len());
+        assert_eq!(world.hot_contacts[0], HotContacts::EMPTY);
     }
 
     #[test]
@@ -691,11 +722,9 @@ mod tests {
                 .length(),
             Length::from_meters(0.5).unwrap()
         );
-        assert!(
-            world
-                .remove_rope_joint(BodyId::new(1), BodyId::new(3))
-                .is_some()
-        );
+        assert!(world
+            .remove_rope_joint(BodyId::new(1), BodyId::new(3))
+            .is_some());
         assert!(world.rope_joints().is_empty());
 
         world.remove_static_body(BodyId::new(2)).unwrap();

@@ -1,8 +1,8 @@
 mod brute_force;
 mod grid;
 
-use super::StepStats;
 use super::constraint::{relative_normal_speed, two_bodies_mut};
+use super::StepStats;
 use crate::body::{Body, StaticBody};
 use crate::collision::CollisionSolver;
 use crate::geometry::Aabb;
@@ -151,6 +151,10 @@ impl Detector<'_> {
                                 normal: contact.normal,
                                 penetration: contact.penetration,
                                 correct_position: point_index == 0,
+                                feature_a: contact.feature_a,
+                                feature_b: contact.feature_b,
+                                part_a: contact.part_a,
+                                part_b: contact.part_b,
                             });
                         }
                     },
@@ -202,6 +206,10 @@ impl Detector<'_> {
                         normal: contact.normal,
                         penetration: contact.penetration,
                         correct_position: point_index == 0,
+                        feature_a: contact.feature_a,
+                        feature_b: contact.feature_b,
+                        part_a: contact.part_a,
+                        part_b: contact.part_b,
                     });
                 }
             },
@@ -257,7 +265,6 @@ pub(super) fn wake_impacted_bodies(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UnitVector;
     use crate::body::{BodyId, BodyState, Material};
     use crate::collider::{Circle, CompositeCollider};
     use crate::quantity::{
@@ -265,6 +272,7 @@ mod tests {
     };
     use crate::transform::Transform;
     use crate::world::{GridBroadPhase, WorldSettings};
+    use crate::UnitVector;
     use alloc::vec;
 
     fn zero_gravity_world() -> World {
@@ -318,6 +326,10 @@ mod tests {
                 normal: UnitVector::X,
                 penetration: Length::ZERO,
                 correct_position: true,
+                feature_a: crate::collision::ColliderFeature::Circle,
+                feature_b: crate::collision::ColliderFeature::Circle,
+                part_a: None,
+                part_b: None,
             });
         }
 

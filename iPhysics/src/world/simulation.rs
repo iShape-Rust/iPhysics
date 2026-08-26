@@ -27,7 +27,8 @@ impl World {
         let mut stats = self.build_contacts();
         contact_detection::wake_impacted_bodies(self);
 
-        let mut contact_constraints = vec![];
+        let mut contact_constraints = contact_solver::prepare_constraints(self);
+        contact_solver::prepare_warm_start(self, &mut contact_constraints);
         let mut mouse_states =
             vec![mouse_solver::MouseImpulseState::default(); self.mouse_joints.len()];
         let mut distance_states =
@@ -35,16 +36,14 @@ impl World {
         let mut rope_states =
             vec![joint_solver::RopeImpulseState::default(); self.rope_joints.len()];
         let mut reverse = false;
-        for iteration in 0..self.settings.velocity_iterations.max(1) {
+        for _ in 0..self.settings.velocity_iterations.max(1) {
             joint_solver::solve_distance_velocities(self, &mut distance_states, reverse);
             joint_solver::solve_rope_velocities(self, &mut rope_states, reverse);
             mouse_solver::solve_velocities(self, &mut mouse_states, reverse);
-            if iteration == 0 {
-                contact_constraints = contact_solver::prepare_constraints(self);
-            }
-            contact_solver::solve_velocities(self, &mut contact_constraints, iteration == 0);
+            contact_solver::solve_velocities(self, &mut contact_constraints, false);
             reverse = !reverse;
         }
+        contact_solver::rebuild_contact_cache(self, &contact_constraints);
         contact_solver::correct_positions(self);
         self.integrate_transforms();
         self.update_sleep_states(&mut stats);
@@ -157,6 +156,7 @@ mod tests {
             .unwrap();
 
         first.step();
+        assert_eq!(first.hot_contacts[0].len(), 1);
         let mut replay = first.clone();
         first.active_contacts.clear();
 
@@ -166,6 +166,56 @@ mod tests {
         }
 
         assert_eq!(first.bodies(), replay.bodies());
+        assert_eq!(first.active_contacts, replay.active_contacts);
+        assert_eq!(first.hot_contacts, replay.hot_contacts);
+    }
+
+    #[test]
+    fn vanished_contact_is_forgotten_before_it_returns() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, 1.0, -1.0, Material::INELASTIC))
+            .unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::IDENTITY,
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+
+        world.step();
+        assert_eq!(world.hot_contacts[0].len(), 1);
+
+        world
+            .body_mut(BodyId::new(1))
+            .unwrap()
+            .state_mut()
+            .set_transform(Transform::new(
+                Position::from_meters(5.0, 0.0).unwrap(),
+                Angle::ZERO,
+            ));
+        world.step();
+        assert_eq!(world.hot_contacts[0].len(), 0);
+
+        let body = world.body_mut(BodyId::new(1)).unwrap();
+        body.state_mut().set_transform(Transform::new(
+            Position::from_meters(1.0, 0.0).unwrap(),
+            Angle::ZERO,
+        ));
+        body.state_mut().set_linear_velocity(LinearVelocity::ZERO);
+        world.step();
+
+        assert_eq!(
+            world
+                .body(BodyId::new(1))
+                .unwrap()
+                .state()
+                .linear_velocity(),
+            LinearVelocity::ZERO
+        );
+        assert_eq!(world.hot_contacts[0].len(), 0);
     }
 
     #[test]

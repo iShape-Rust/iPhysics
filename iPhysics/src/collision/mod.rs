@@ -6,5 +6,5 @@ mod dispatch;
 
 pub use circle_circle::collide as collide_circles;
 pub use contact::Contact;
-pub(crate) use contact::ContactManifold;
+pub(crate) use contact::{ColliderFeature, ContactManifold};
 pub(crate) use dispatch::CollisionSolver;
