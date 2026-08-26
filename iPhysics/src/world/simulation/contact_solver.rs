@@ -10,6 +10,8 @@ const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 const MAX_ANGULAR_RESPONSE_Q24: u64 = AngularVelocity::MAX_CHANGE << 24;
+const LINEAR_RESPONSE_FRACTION_BITS: u32 = 31;
+const ONE_LINEAR_RESPONSE_Q31: u64 = 1 << LINEAR_RESPONSE_FRACTION_BITS;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ContactImpulseState {
@@ -23,6 +25,10 @@ pub(super) struct ContactImpulseState {
     normal_angular_response_b_q24: i64,
     tangent_angular_response_a_q24: i64,
     tangent_angular_response_b_q24: i64,
+    normal_linear_response_a_q31: u32,
+    normal_linear_response_b_q31: u32,
+    tangent_linear_response_a_q31: u32,
+    tangent_linear_response_b_q31: u32,
     normal_initialized: bool,
     tangent_initialized: bool,
 }
@@ -141,6 +147,12 @@ fn solve_contact_velocity(
             .as_deref()
             .map(|body| angular_response_q24(body.inverse_inertia_q40(), rbp, normal_inverse_sum))
             .unwrap_or(0);
+        impulse_state.normal_linear_response_a_q31 =
+            linear_response_q31(a.inverse_mass_q24(), normal_inverse_sum);
+        impulse_state.normal_linear_response_b_q31 = b
+            .as_deref()
+            .map(|body| linear_response_q31(body.inverse_mass_q24(), normal_inverse_sum))
+            .unwrap_or(0);
         impulse_state.normal_initialized = true;
     }
     let previous_normal = impulse_state.normal_velocity_change_q10;
@@ -155,7 +167,8 @@ fn solve_contact_velocity(
             b.as_deref_mut(),
             normal,
             normal_velocity_change,
-            normal_inverse_sum,
+            impulse_state.normal_linear_response_a_q31,
+            impulse_state.normal_linear_response_b_q31,
             impulse_state.normal_angular_response_a_q24,
             impulse_state.normal_angular_response_b_q24,
         );
@@ -182,6 +195,12 @@ fn solve_contact_velocity(
             .as_deref()
             .map(|body| angular_response_q24(body.inverse_inertia_q40(), rbt, tangent_inverse_sum))
             .unwrap_or(0);
+        impulse_state.tangent_linear_response_a_q31 =
+            linear_response_q31(a.inverse_mass_q24(), tangent_inverse_sum);
+        impulse_state.tangent_linear_response_b_q31 = b
+            .as_deref()
+            .map(|body| linear_response_q31(body.inverse_mass_q24(), tangent_inverse_sum))
+            .unwrap_or(0);
         impulse_state.tangent_initialized = true;
     }
 
@@ -203,7 +222,8 @@ fn solve_contact_velocity(
         b,
         tangent,
         velocity_change,
-        tangent_inverse_sum,
+        impulse_state.tangent_linear_response_a_q31,
+        impulse_state.tangent_linear_response_b_q31,
         impulse_state.tangent_angular_response_a_q24,
         impulse_state.tangent_angular_response_b_q24,
     );
@@ -214,7 +234,8 @@ fn apply_contact_impulse(
     b: Option<&mut Body>,
     mut axis: UnitVector,
     impulse_numerator_q10: i64,
-    inverse_sum_q24: u64,
+    linear_response_a_q31: u32,
+    linear_response_b_q31: u32,
     angular_response_a_q24: i64,
     angular_response_b_q24: i64,
 ) {
@@ -227,9 +248,7 @@ fn apply_contact_impulse(
     }
     let magnitude = impulse_numerator_q10.unsigned_abs();
     debug_assert!(magnitude <= MAX_VELOCITY_CHANGE_RAW);
-    let inverse_a = a.inverse_mass_q24() as u64;
-    let inverse_b = b.as_deref().map(Body::inverse_mass_q24).unwrap_or(0) as u64;
-    let change_a = div_round(magnitude * inverse_a, inverse_sum_q24);
+    let change_a = linear_velocity_change_raw(magnitude, linear_response_a_q31);
     if change_a != 0 {
         let [change_x, change_y] = axis.scaled_wide_raw(change_a);
         add_velocity(a, -change_x, -change_y);
@@ -239,7 +258,7 @@ fn apply_contact_impulse(
     add_angular_velocity(a, -angular_change_a);
 
     if let Some(body) = b {
-        let change_b = div_round(magnitude * inverse_b, inverse_sum_q24);
+        let change_b = linear_velocity_change_raw(magnitude, linear_response_b_q31);
         if change_b != 0 {
             let [change_x, change_y] = axis.scaled_wide_raw(change_b);
             add_velocity(body, change_x, change_y);
@@ -248,6 +267,25 @@ fn apply_contact_impulse(
             angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q24);
         add_angular_velocity(body, angular_change_b);
     }
+}
+
+#[inline(always)]
+fn linear_response_q31(inverse_mass_q24: u32, inverse_sum_q24: u64) -> u32 {
+    if inverse_mass_q24 == 0 {
+        return 0;
+    }
+
+    debug_assert!(inverse_sum_q24 >= inverse_mass_q24 as u64);
+    let numerator = (inverse_mass_q24 as u64) << LINEAR_RESPONSE_FRACTION_BITS;
+    div_round(numerator, inverse_sum_q24).min(ONE_LINEAR_RESPONSE_Q31) as u32
+}
+
+#[inline(always)]
+fn linear_velocity_change_raw(magnitude_q10: u64, linear_response_q31: u32) -> u64 {
+    round_shift(
+        magnitude_q10 * linear_response_q31 as u64,
+        LINEAR_RESPONSE_FRACTION_BITS,
+    )
 }
 
 #[inline(always)]
@@ -409,6 +447,41 @@ mod tests {
     }
 
     #[test]
+    fn cached_linear_response_tracks_division_reference() {
+        let magnitudes = [0, 1, 17, 1 << 10, 1 << 20, MAX_VELOCITY_CHANGE_RAW];
+        let inverse_masses = [0, 1, 1 << 16, 1 << 24, u32::MAX];
+
+        for magnitude in magnitudes {
+            for inverse_mass in inverse_masses {
+                let inverse_mass_wide = inverse_mass as u64;
+                let inverse_sums = [
+                    inverse_mass_wide.max(1),
+                    inverse_mass_wide.saturating_add(1),
+                    inverse_mass_wide.saturating_mul(2).max(1),
+                    1 << 32,
+                    1 << 48,
+                    u64::MAX,
+                ];
+
+                for inverse_sum in inverse_sums {
+                    if inverse_sum < inverse_mass_wide {
+                        continue;
+                    }
+                    let expected = div_round(magnitude * inverse_mass_wide, inverse_sum);
+                    let response = linear_response_q31(inverse_mass, inverse_sum);
+                    let actual = linear_velocity_change_raw(magnitude, response);
+
+                    assert!(
+                        actual.abs_diff(expected) <= 1,
+                        "expected {expected}, got {actual} for {magnitude}, \
+                         {inverse_mass}, {inverse_sum}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cached_angular_response_tracks_full_width_reference() {
         let velocity_changes = [
             -(MAX_VELOCITY_CHANGE_RAW as i64),
@@ -464,8 +537,8 @@ mod tests {
     }
 
     #[test]
-    fn cached_angular_responses_double_impulse_state_size() {
-        assert_eq!(core::mem::size_of::<ContactImpulseState>(), 64);
+    fn cached_responses_set_impulse_state_size() {
+        assert_eq!(core::mem::size_of::<ContactImpulseState>(), 80);
     }
 
     #[test]
