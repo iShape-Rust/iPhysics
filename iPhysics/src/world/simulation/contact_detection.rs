@@ -150,11 +150,7 @@ impl Detector<'_> {
                                 point: contact.point,
                                 normal: contact.normal,
                                 penetration: contact.penetration,
-                                correct_position: point_index == 0,
-                                feature_a: contact.feature_a,
-                                feature_b: contact.feature_b,
-                                part_a: contact.part_a,
-                                part_b: contact.part_b,
+                                key: contact.key.with_correct_position(point_index == 0),
                             });
                         }
                     },
@@ -205,11 +201,7 @@ impl Detector<'_> {
                         point: contact.point,
                         normal: contact.normal,
                         penetration: contact.penetration,
-                        correct_position: point_index == 0,
-                        feature_a: contact.feature_a,
-                        feature_b: contact.feature_b,
-                        part_a: contact.part_a,
-                        part_b: contact.part_b,
+                        key: contact.key.with_correct_position(point_index == 0),
                     });
                 }
             },
@@ -325,11 +317,11 @@ mod tests {
                 point: Position::from_meters(x, y).unwrap().into(),
                 normal: UnitVector::X,
                 penetration: Length::ZERO,
-                correct_position: true,
-                feature_a: crate::collision::ColliderFeature::Circle,
-                feature_b: crate::collision::ColliderFeature::Circle,
-                part_a: None,
-                part_b: None,
+                key: crate::collision::ContactKey::new(
+                    crate::collision::ColliderFeature::Circle,
+                    crate::collision::ColliderFeature::Circle,
+                )
+                .with_correct_position(true),
             });
         }
 

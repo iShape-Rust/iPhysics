@@ -3,7 +3,7 @@ mod settings;
 mod simulation;
 
 use crate::body::{Body, BodyId, StaticBody};
-use crate::collision::{ColliderFeature, Contact};
+use crate::collision::{Contact, ContactKey};
 use crate::geometry::{GeometryPoint, UnitVector};
 use crate::joint::{DistanceJoint, MouseJoint, RopeJoint};
 use crate::quantity::Length;
@@ -52,6 +52,7 @@ pub struct World {
 }
 
 /// Solver contact using direct indices into the world's body storage.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ActiveContact {
     pub(crate) body_a: usize,
@@ -59,12 +60,8 @@ pub(crate) struct ActiveContact {
     pub(crate) point: GeometryPoint,
     pub(crate) normal: UnitVector,
     pub(crate) penetration: Length,
-    /// Position correction is shared by all points in one manifold.
-    pub(crate) correct_position: bool,
-    pub(crate) feature_a: ColliderFeature,
-    pub(crate) feature_b: ColliderFeature,
-    pub(crate) part_a: Option<usize>,
-    pub(crate) part_b: Option<usize>,
+    /// `key` also stores whether this point owns manifold position correction.
+    pub(crate) key: ContactKey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,10 +137,7 @@ impl<'a> Contacts<'a> {
             point: active.point,
             normal: active.normal,
             penetration: active.penetration,
-            feature_a: active.feature_a,
-            feature_b: active.feature_b,
-            part_a: active.part_a,
-            part_b: active.part_b,
+            key: active.key,
         }
     }
 }
@@ -567,6 +561,11 @@ mod tests {
             Length::from_meters(1.0).unwrap(),
             Force::from_newtons(10.0).unwrap(),
         )
+    }
+
+    #[test]
+    fn active_contact_storage_remains_compact() {
+        assert_eq!(core::mem::size_of::<ActiveContact>(), 48);
     }
 
     #[test]

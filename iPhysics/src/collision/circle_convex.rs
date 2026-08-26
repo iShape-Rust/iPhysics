@@ -1,4 +1,4 @@
-use super::{ColliderFeature, Contact};
+use super::{ColliderFeature, Contact, ContactKey};
 use crate::body::BodyId;
 use crate::collider::{Circle, Convex, TransformedVertices};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -149,10 +149,7 @@ fn build_contact(
         point: circle_center.offset(normal, contact_offset),
         normal,
         penetration: Length::from_raw(penetration),
-        feature_a: ColliderFeature::Circle,
-        feature_b: convex_feature,
-        part_a: None,
-        part_b: None,
+        key: ContactKey::new(ColliderFeature::Circle, convex_feature),
     }
 }
 

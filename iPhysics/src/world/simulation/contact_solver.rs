@@ -153,7 +153,9 @@ pub(super) fn prepare_warm_start(world: &mut World, constraints: &mut [ContactCo
             continue;
         }
         let contact = world.active_contacts[index];
-        let identity = contact_identity(world, contact);
+        let Some(identity) = contact_identity(world, contact) else {
+            continue;
+        };
         let cached = world.hot_contacts[contact.body_a]
             .find(identity)
             .or_else(|| match contact.body_b {
@@ -185,8 +187,11 @@ pub(super) fn rebuild_contact_cache(world: &mut World, constraints: &[ContactCon
             continue;
         }
         let contact = world.active_contacts[index];
+        let Some(identity) = contact_identity(world, contact) else {
+            continue;
+        };
         let hot = HotContact {
-            identity: contact_identity(world, contact),
+            identity,
             normal_velocity_change_q10: constraint.normal_velocity_change_q10,
             tangent_velocity_change_q10: constraint.tangent_velocity_change_q10,
         };
@@ -218,19 +223,17 @@ fn initialize_restitution_targets(world: &World, constraints: &mut [ContactConst
     }
 }
 
-fn contact_identity(world: &World, contact: ActiveContact) -> ContactIdentity {
+fn contact_identity(world: &World, contact: ActiveContact) -> Option<ContactIdentity> {
+    let key = contact.key.cache_key()?;
     let body_b = match contact.body_b {
         ContactBodyIndex::Dynamic(index_b) => world.bodies[index_b].id(),
         ContactBodyIndex::Static(index_b) => world.static_bodies[index_b].id(),
     };
-    ContactIdentity {
+    Some(ContactIdentity {
         body_a: world.bodies[contact.body_a].id(),
         body_b,
-        part_a: contact.part_a,
-        part_b: contact.part_b,
-        feature_a: contact.feature_a,
-        feature_b: contact.feature_b,
-    }
+        key,
+    })
 }
 
 fn apply_cached_velocity(world: &mut World, index: usize, constraint: &ContactConstraint) {
@@ -300,7 +303,7 @@ fn solve_velocity(world: &mut World, index: usize, constraint: &mut ContactConst
 
 pub(super) fn correct_positions(world: &mut World) {
     for contact in world.active_contacts.iter().copied() {
-        if !contact.correct_position {
+        if !contact.key.correct_position() {
             continue;
         }
         let correction = contact
@@ -621,11 +624,11 @@ mod tests {
             point,
             normal,
             penetration: Length::ZERO,
-            correct_position: true,
-            feature_a: crate::collision::ColliderFeature::Circle,
-            feature_b: crate::collision::ColliderFeature::Circle,
-            part_a: None,
-            part_b: None,
+            key: crate::collision::ContactKey::new(
+                crate::collision::ColliderFeature::Circle,
+                crate::collision::ColliderFeature::Circle,
+            )
+            .with_correct_position(true),
         }
     }
 

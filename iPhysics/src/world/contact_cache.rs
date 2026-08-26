@@ -1,5 +1,5 @@
 use crate::body::BodyId;
-use crate::collision::ColliderFeature;
+use crate::collision::CacheContactKey;
 
 pub(super) const HOT_CONTACT_CAPACITY: usize = 3;
 
@@ -7,10 +7,7 @@ pub(super) const HOT_CONTACT_CAPACITY: usize = 3;
 pub(super) struct ContactIdentity {
     pub(super) body_a: BodyId,
     pub(super) body_b: BodyId,
-    pub(super) part_a: Option<usize>,
-    pub(super) part_b: Option<usize>,
-    pub(super) feature_a: ColliderFeature,
-    pub(super) feature_b: ColliderFeature,
+    pub(super) key: CacheContactKey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,16 +95,28 @@ impl Default for HotContacts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collision::{ColliderFeature, ContactKey};
 
     fn identity(other: u64, part_b: Option<usize>, feature: u8) -> ContactIdentity {
         ContactIdentity {
             body_a: BodyId::new(1),
             body_b: BodyId::new(other),
-            part_a: None,
-            part_b,
-            feature_a: ColliderFeature::ConvexVertex(feature),
-            feature_b: ColliderFeature::ConvexEdge(0),
+            key: ContactKey::new(
+                ColliderFeature::ConvexVertex(feature),
+                ColliderFeature::ConvexEdge(0),
+            )
+            .with_parts(None, part_b)
+            .cache_key()
+            .unwrap(),
         }
+    }
+
+    #[test]
+    fn cache_storage_uses_the_packed_identity() {
+        assert_eq!(core::mem::size_of::<ContactIdentity>(), 24);
+        assert_eq!(core::mem::size_of::<HotContact>(), 40);
+        assert_eq!(core::mem::size_of::<Option<HotContact>>(), 40);
+        assert_eq!(core::mem::size_of::<HotContacts>(), 120);
     }
 
     #[test]

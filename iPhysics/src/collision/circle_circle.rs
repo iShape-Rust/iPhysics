@@ -1,4 +1,4 @@
-use super::{ColliderFeature, Contact};
+use super::{ColliderFeature, Contact, ContactKey};
 use crate::body::BodyId;
 use crate::collider::Circle;
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -70,10 +70,7 @@ fn collide_at(
         point: center_a.offset(normal, contact_offset),
         normal,
         penetration: Length::from_raw(penetration_raw),
-        feature_a: ColliderFeature::Circle,
-        feature_b: ColliderFeature::Circle,
-        part_a: None,
-        part_b: None,
+        key: ContactKey::new(ColliderFeature::Circle, ColliderFeature::Circle),
     })
 }
 

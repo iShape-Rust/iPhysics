@@ -1,4 +1,4 @@
-use super::{ColliderFeature, Contact, ContactManifold};
+use super::{ColliderFeature, Contact, ContactKey, ContactManifold};
 use crate::body::BodyId;
 use crate::collider::{Convex, TransformedVertices};
 use crate::geometry::{GeometryPoint, UnitVector};
@@ -131,10 +131,7 @@ pub(super) fn collide_with_scratch(
             point: candidate.point,
             normal,
             penetration: Length::from_raw(penetration),
-            feature_a,
-            feature_b,
-            part_a: None,
-            part_b: None,
+            key: ContactKey::new(feature_a, feature_b),
         }
     };
 

@@ -241,9 +241,9 @@ mod tests {
         assert_eq!(contact.body_a, BodyId::new(1));
         assert_eq!(contact.body_b, BodyId::new(2));
         assert!(contact.penetration.raw() > 0);
-        assert_eq!(contact.feature_a, ColliderFeature::Circle);
+        assert_eq!(contact.feature_a(), ColliderFeature::Circle);
         assert!(matches!(
-            contact.feature_b,
+            contact.feature_b(),
             ColliderFeature::ConvexVertex(_) | ColliderFeature::ConvexEdge(_)
         ));
     }
@@ -266,7 +266,7 @@ mod tests {
                     result.extend(
                         manifold
                             .into_contacts()
-                            .map(|contact| (contact.feature_a, contact.feature_b)),
+                            .map(|contact| (contact.feature_a(), contact.feature_b())),
                     )
                 },
             );
@@ -321,7 +321,7 @@ mod tests {
             Transform::IDENTITY,
             |manifold| {
                 let contact = manifold.first();
-                parts.push((contact.part_a, contact.part_b));
+                parts.push((contact.part_a(), contact.part_b()));
             },
         );
 
