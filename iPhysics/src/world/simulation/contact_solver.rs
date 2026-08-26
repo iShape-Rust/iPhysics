@@ -11,7 +11,8 @@ use alloc::vec::Vec;
 const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 16_384; // 0.25 m
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
-const MAX_ANGULAR_RESPONSE_Q24: u64 = AngularVelocity::MAX_CHANGE << 24;
+const ANGULAR_RESPONSE_FRACTION_BITS: u32 = 17;
+const MAX_ANGULAR_RESPONSE_Q17: u64 = AngularVelocity::MAX_CHANGE << ANGULAR_RESPONSE_FRACTION_BITS;
 const LINEAR_RESPONSE_FRACTION_BITS: u32 = 31;
 const ONE_LINEAR_RESPONSE_Q31: u64 = 1 << LINEAR_RESPONSE_FRACTION_BITS;
 const FRICTION_RESPONSE_FRACTION_BITS: u32 = 31;
@@ -25,8 +26,8 @@ const MAX_FRICTION_RESPONSE_Q31: u64 =
 #[derive(Debug, Clone, Copy, Default)]
 struct AxisConstraint {
     inverse_sum_q24: u64,
-    angular_response_a_q24: i64,
-    angular_response_b_q24: i64,
+    angular_response_a_q17: i64,
+    angular_response_b_q17: i64,
     linear_response_a_q31: u32,
     linear_response_b_q31: u32,
     lever_a_q16: i32,
@@ -107,14 +108,14 @@ fn prepare_axis_constraint(
 
     AxisConstraint {
         inverse_sum_q24,
-        angular_response_a_q24: angular_response_q24(
+        angular_response_a_q17: angular_response_q17(
             a.inverse_inertia_q40(),
             lever_a_q16,
             inverse_sum_q24,
         ),
-        angular_response_b_q24: b
+        angular_response_b_q17: b
             .map(|body| {
-                angular_response_q24(body.inverse_inertia_q40(), lever_b_q16, inverse_sum_q24)
+                angular_response_q17(body.inverse_inertia_q40(), lever_b_q16, inverse_sum_q24)
             })
             .unwrap_or(0),
         linear_response_a_q31: linear_response_q31(a.inverse_mass_q24(), inverse_sum_q24),
@@ -245,8 +246,8 @@ fn solve_contact_velocity(
             normal_velocity_change,
             constraint.normal.linear_response_a_q31,
             constraint.normal.linear_response_b_q31,
-            constraint.normal.angular_response_a_q24,
-            constraint.normal.angular_response_b_q24,
+            constraint.normal.angular_response_a_q17,
+            constraint.normal.angular_response_b_q17,
         );
     }
 
@@ -283,8 +284,8 @@ fn solve_contact_velocity(
         velocity_change,
         constraint.tangent.linear_response_a_q31,
         constraint.tangent.linear_response_b_q31,
-        constraint.tangent.angular_response_a_q24,
-        constraint.tangent.angular_response_b_q24,
+        constraint.tangent.angular_response_a_q17,
+        constraint.tangent.angular_response_b_q17,
     );
 }
 
@@ -295,8 +296,8 @@ fn apply_contact_impulse(
     impulse_numerator_q10: i64,
     linear_response_a_q31: u32,
     linear_response_b_q31: u32,
-    angular_response_a_q24: i64,
-    angular_response_b_q24: i64,
+    angular_response_a_q17: i64,
+    angular_response_b_q17: i64,
 ) {
     if impulse_numerator_q10 == 0 {
         return;
@@ -313,7 +314,7 @@ fn apply_contact_impulse(
         add_velocity(a, -change_x, -change_y);
     }
     let angular_change_a =
-        angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q24);
+        angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q17);
     add_angular_velocity(a, -angular_change_a);
 
     if let Some(body) = b {
@@ -323,7 +324,7 @@ fn apply_contact_impulse(
             add_velocity(body, change_x, change_y);
         }
         let angular_change_b =
-            angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q24);
+            angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q17);
         add_angular_velocity(body, angular_change_b);
     }
 }
@@ -374,31 +375,30 @@ fn friction_velocity_change_limit_q10(
 }
 
 #[inline(always)]
-fn angular_response_q24(inverse_inertia_q40: u64, lever_q16: i32, inverse_sum_q24: u64) -> i64 {
+fn angular_response_q17(inverse_inertia_q40: u64, lever_q16: i32, inverse_sum_q24: u64) -> i64 {
     if inverse_inertia_q40 == 0 || lever_q16 == 0 {
         return 0;
     }
 
-    // This response maps a Q10 contact-speed change to angular Q16. Keeping
-    // 24 fractional response bits changes the original 26-bit denominator
-    // adjustment into a two-bit shift paid once per contact axis.
+    // Q17 is the most precise response format whose maximum value multiplied
+    // by the maximum Q10 solver impulse is guaranteed to fit u64.
     let numerator = inverse_inertia_q40 as u128 * lever_q16.unsigned_abs() as u128;
-    let denominator = (inverse_sum_q24 as u128) << 2;
+    let denominator = (inverse_sum_q24 as u128) << (26 - ANGULAR_RESPONSE_FRACTION_BITS);
     let magnitude = ((numerator + (denominator >> 1)) / denominator)
-        .min(MAX_ANGULAR_RESPONSE_Q24 as u128) as i64;
+        .min(MAX_ANGULAR_RESPONSE_Q17 as u128) as i64;
     if lever_q16 < 0 { -magnitude } else { magnitude }
 }
 
 #[inline(always)]
-fn angular_velocity_change_raw(velocity_change_q10: i64, angular_response_q24: i64) -> i64 {
-    if velocity_change_q10 == 0 || angular_response_q24 == 0 {
+fn angular_velocity_change_raw(velocity_change_q10: i64, angular_response_q17: i64) -> i64 {
+    if velocity_change_q10 == 0 || angular_response_q17 == 0 {
         return 0;
     }
 
-    let negative = (velocity_change_q10 < 0) ^ (angular_response_q24 < 0);
-    let product =
-        velocity_change_q10.unsigned_abs() as u128 * angular_response_q24.unsigned_abs() as u128;
-    let magnitude = ((product + (1 << 23)) >> 24).min(AngularVelocity::MAX_CHANGE as u128) as i64;
+    let negative = (velocity_change_q10 < 0) ^ (angular_response_q17 < 0);
+    let product = velocity_change_q10.unsigned_abs() * angular_response_q17.unsigned_abs();
+    let magnitude = round_shift(product, ANGULAR_RESPONSE_FRACTION_BITS)
+        .min(AngularVelocity::MAX_CHANGE) as i64;
     if negative { -magnitude } else { magnitude }
 }
 
@@ -553,7 +553,12 @@ mod tests {
     }
 
     #[test]
-    fn cached_angular_response_tracks_full_width_reference() {
+    fn cached_q17_angular_response_tracks_full_width_reference() {
+        assert!(
+            MAX_VELOCITY_CHANGE_RAW
+                .checked_mul(MAX_ANGULAR_RESPONSE_Q17)
+                .is_some()
+        );
         let velocity_changes = [
             -(MAX_VELOCITY_CHANGE_RAW as i64),
             -(1 << 10),
@@ -593,11 +598,11 @@ mod tests {
                         } else {
                             expected_magnitude
                         };
-                        let response = angular_response_q24(inverse_inertia, lever, inverse_sum);
+                        let response = angular_response_q17(inverse_inertia, lever, inverse_sum);
                         let actual = angular_velocity_change_raw(velocity_change, response);
 
                         assert!(
-                            actual.abs_diff(expected) <= 1,
+                            actual.abs_diff(expected) <= 32,
                             "expected {expected}, got {actual} for {velocity_change}, \
                              {inverse_inertia}, {lever}, {inverse_sum}",
                         );
