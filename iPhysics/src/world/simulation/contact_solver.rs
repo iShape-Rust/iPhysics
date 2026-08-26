@@ -14,6 +14,13 @@ const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 const MAX_ANGULAR_RESPONSE_Q24: u64 = AngularVelocity::MAX_CHANGE << 24;
 const LINEAR_RESPONSE_FRACTION_BITS: u32 = 31;
 const ONE_LINEAR_RESPONSE_Q31: u64 = 1 << LINEAR_RESPONSE_FRACTION_BITS;
+const FRICTION_RESPONSE_FRACTION_BITS: u32 = 31;
+// One contact can be visited at most 255 times per step, and each visit can
+// change its tangent accumulator by at most one bounded relative speed.
+const MAX_TANGENT_ACCUMULATOR_RAW: u64 =
+    (u8::MAX as u64 + 1) * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
+const MAX_FRICTION_RESPONSE_Q31: u64 =
+    MAX_TANGENT_ACCUMULATOR_RAW << FRICTION_RESPONSE_FRACTION_BITS;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct AxisConstraint {
@@ -33,10 +40,10 @@ pub(super) struct ContactConstraint {
     // numerators avoids introducing another stored fixed-point format.
     normal_velocity_change_q10: u64,
     tangent_velocity_change_q10: i64,
-    normal_target_speed_q10: u64,
+    normal_target_speed_q10: u32,
     normal: AxisConstraint,
     tangent: AxisConstraint,
-    friction_q16: u32,
+    friction_response_q31: u64,
     restitution_q16: u32,
 }
 
@@ -63,11 +70,15 @@ pub(super) fn prepare_constraints(world: &World) -> Vec<ContactConstraint> {
             } else {
                 prepare_axis_constraint(a, b, contact, contact.normal.perpendicular())
             };
-
+            let friction_response_q31 = friction_response_q31(
+                friction_q16,
+                normal.inverse_sum_q24,
+                tangent.inverse_sum_q24,
+            );
             ContactConstraint {
                 normal,
                 tangent,
-                friction_q16,
+                friction_response_q31,
                 restitution_q16: material_a.combined_restitution_raw(material_b),
                 ..ContactConstraint::default()
             }
@@ -218,7 +229,7 @@ fn solve_contact_velocity(
     );
     if initialize_target {
         constraint.normal_target_speed_q10 =
-            restitution_target_speed(normal_speed, constraint.restitution_q16);
+            restitution_target_speed(normal_speed, constraint.restitution_q16) as u32;
     }
     let previous_normal = constraint.normal_velocity_change_q10;
     let candidate_normal =
@@ -239,7 +250,7 @@ fn solve_contact_velocity(
         );
     }
 
-    if constraint.friction_q16 == 0 || constraint.normal_velocity_change_q10 == 0 {
+    if constraint.friction_response_q31 == 0 || constraint.normal_velocity_change_q10 == 0 {
         return;
     }
 
@@ -258,10 +269,8 @@ fn solve_contact_velocity(
     let previous = constraint.tangent_velocity_change_q10;
     let candidate = previous.saturating_sub(tangent_speed as i64);
     let limit = friction_velocity_change_limit_q10(
-        constraint.friction_q16,
         constraint.normal_velocity_change_q10,
-        constraint.normal.inverse_sum_q24,
-        constraint.tangent.inverse_sum_q24,
+        constraint.friction_response_q31,
     );
     let accumulated = candidate.clamp(-limit, limit);
     let velocity_change = accumulated - previous;
@@ -339,17 +348,29 @@ fn linear_velocity_change_raw(magnitude_q10: u64, linear_response_q31: u32) -> u
 }
 
 #[inline(always)]
-fn friction_velocity_change_limit_q10(
+fn friction_response_q31(
     friction_q16: u32,
-    normal_velocity_change_q10: u64,
     normal_inverse_sum_q24: u64,
     tangent_inverse_sum_q24: u64,
+) -> u64 {
+    if friction_q16 == 0 || normal_inverse_sum_q24 == 0 || tangent_inverse_sum_q24 == 0 {
+        return 0;
+    }
+
+    // friction is Q16, so shifting the numerator by 15 produces a Q31
+    // multiplier for normal_velocity_change_q10.
+    let numerator = (friction_q16 as u128 * tangent_inverse_sum_q24 as u128) << 15;
+    let denominator = normal_inverse_sum_q24 as u128;
+    ((numerator + (denominator >> 1)) / denominator).min(MAX_FRICTION_RESPONSE_Q31 as u128) as u64
+}
+
+#[inline(always)]
+fn friction_velocity_change_limit_q10(
+    normal_velocity_change_q10: u64,
+    friction_response_q31: u64,
 ) -> i64 {
-    let numerator = (friction_q16 as u128)
-        .saturating_mul(normal_velocity_change_q10 as u128)
-        .saturating_mul(tangent_inverse_sum_q24 as u128);
-    let denominator = (normal_inverse_sum_q24 as u128) << 16;
-    (numerator / denominator).min(i64::MAX as u128) as i64
+    let product = normal_velocity_change_q10 as u128 * friction_response_q31 as u128;
+    ((product >> FRICTION_RESPONSE_FRACTION_BITS).min(MAX_TANGENT_ACCUMULATOR_RAW as u128)) as i64
 }
 
 #[inline(always)]
@@ -738,11 +759,51 @@ mod tests {
     #[test]
     fn coulomb_limit_scales_with_normal_impulse() {
         let inverse_mass = 1_u64 << 24;
+        let response = friction_response_q31(1 << 13, inverse_mass, 3 * inverse_mass);
 
-        assert_eq!(
-            friction_velocity_change_limit_q10(1 << 13, 1 << 10, inverse_mass, 3 * inverse_mass,),
-            384
-        );
+        assert_eq!(friction_velocity_change_limit_q10(1 << 10, response), 384);
+    }
+
+    #[test]
+    fn cached_friction_response_tracks_full_width_reference() {
+        let friction_values = [0, 1, 1 << 13, 1 << 16, u32::MAX];
+        let normal_changes = [
+            0,
+            1,
+            17,
+            1 << 10,
+            1 << 20,
+            u8::MAX as u64 * MAX_VELOCITY_CHANGE_RAW,
+        ];
+        let inverse_sums = [1, 1 << 16, 1 << 24, 1 << 32, 1 << 48, u64::MAX];
+
+        for friction_q16 in friction_values {
+            for normal_change in normal_changes {
+                for normal_inverse_sum in inverse_sums {
+                    for tangent_inverse_sum in inverse_sums {
+                        let numerator = friction_q16 as u128
+                            * normal_change as u128
+                            * tangent_inverse_sum as u128;
+                        let denominator = (normal_inverse_sum as u128) << 16;
+                        let expected = (numerator / denominator)
+                            .min(MAX_TANGENT_ACCUMULATOR_RAW as u128)
+                            as i64;
+                        let response = friction_response_q31(
+                            friction_q16,
+                            normal_inverse_sum,
+                            tangent_inverse_sum,
+                        );
+                        let actual = friction_velocity_change_limit_q10(normal_change, response);
+
+                        assert!(
+                            actual.abs_diff(expected) <= 1,
+                            "expected {expected}, got {actual} for {friction_q16}, \
+                             {normal_change}, {normal_inverse_sum}, {tangent_inverse_sum}",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
