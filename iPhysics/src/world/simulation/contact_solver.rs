@@ -1,7 +1,6 @@
 use super::constraint::{
-    MAX_RELATIVE_CONTACT_SPEED_RAW, add_angular_velocity, add_position, add_velocity,
-    contact_inverse_mass_q24,
-    relative_speed_along_levers, round_shift_signed, two_bodies_mut,
+    MAX_RELATIVE_CONTACT_SPEED_RAW, contact_inverse_mass_q24, relative_speed_along_levers,
+    round_shift_signed, two_bodies_mut,
 };
 use crate::body::Body;
 use crate::world::contact_cache::{ContactIdentity, HotContact, HotContacts};
@@ -135,121 +134,188 @@ fn prepare_axis_constraint(
     }
 }
 
-pub(super) fn solve_velocities(
-    world: &mut World,
-    constraints: &mut [ContactConstraint],
-    initialize_targets: bool,
-) {
-    debug_assert_eq!(constraints.len(), world.active_contacts.len());
-    if initialize_targets {
-        initialize_restitution_targets(world, constraints);
-    }
-
-    for (index, constraint) in constraints.iter_mut().enumerate() {
-        solve_velocity(world, index, constraint);
-    }
-}
-
 /// Discards one eighth of the body-owned contact impulse once per tick.
 /// Decaying it here, rather than while it crosses contacts, makes the result
 /// independent of contact count and solver iteration count.
-pub(super) fn decay_deferred_contact_impulses(world: &mut World) {
-    for body in &mut world.bodies {
-        let [x, y] = body.state().deferred_contact_linear().raw();
-        let angular = body.state().deferred_contact_angular().raw();
-        body.state_mut().deferred_contact_linear = LinearVelocity::from_wide_saturated(
-            round_shift_signed(x as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
-            round_shift_signed(y as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
-        );
-        body.state_mut().deferred_contact_angular = AngularVelocity::from_wide_saturated(
-            round_shift_signed(angular as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
-        );
-    }
-}
+impl World {
+    pub(super) fn solve_velocities(
+        &mut self,
+        constraints: &mut [ContactConstraint],
+        initialize_targets: bool,
+    ) {
+        debug_assert_eq!(constraints.len(), self.active_contacts.len());
+        if initialize_targets {
+            initialize_restitution_targets(self, constraints);
+        }
 
-/// Removes the remaining inward velocity of existing inelastic contacts and
-/// stores the removed linear and angular motion on each body. Each visit is a
-/// direct projection onto the contact's non-penetration half-space; no contact
-/// lambda is accumulated or cached by this stage.
-pub(super) fn capture_blocked_contact_impulses(
-    world: &mut World,
-    constraints: &[ContactConstraint],
-) {
-    debug_assert_eq!(constraints.len(), world.active_contacts.len());
-    let iterations = world.settings.velocity_iterations.max(1) as usize;
-    for iteration in 0..iterations {
-        for step in 0..constraints.len() {
-            let index = if iteration & 1 == 0 {
-                constraints.len() - 1 - step
-            } else {
-                step
-            };
-            if constraints[index].normal_target_speed_q10 != 0 {
+        for (index, constraint) in constraints.iter_mut().enumerate() {
+            self.solve_velocity(index, constraint);
+        }
+    }
+    pub(super) fn decay_deferred_contact_impulses(&mut self) {
+        for body in &mut self.bodies {
+            let [x, y] = body.state().deferred_contact_linear().raw();
+            let angular = body.state().deferred_contact_angular().raw();
+            body.state_mut().deferred_contact_linear = LinearVelocity::from_wide_saturated(
+                round_shift_signed(x as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+                round_shift_signed(y as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+            );
+            body.state_mut().deferred_contact_angular = AngularVelocity::from_wide_saturated(
+                round_shift_signed(angular as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+            );
+        }
+    }
+
+    pub(super) fn prepare_warm_start(&mut self, constraints: &mut [ContactConstraint]) {
+        debug_assert_eq!(constraints.len(), self.active_contacts.len());
+        initialize_restitution_targets(self, constraints);
+
+        for (index, constraint) in constraints.iter_mut().enumerate() {
+            if constraint.normal_target_speed_q10 != 0 {
                 continue;
             }
-            project_body_velocities_to_contact(world, index);
+            let contact = self.active_contacts[index];
+            let Some(identity) = contact_identity(self, contact) else {
+                continue;
+            };
+            let cached = self.hot_contacts[contact.body_a]
+                .find(identity)
+                .or_else(|| match contact.body_b {
+                    ContactBodyIndex::Dynamic(index_b) => self.hot_contacts[index_b].find(identity),
+                    ContactBodyIndex::Static(_) => None,
+                });
+            if let Some(cached) = cached {
+                constraint.normal_velocity_change_q10 =
+                    cached.normal_velocity_change_q10.min(u32::MAX as u64) as u32;
+                let tangent_limit = friction_velocity_change_limit_q10(
+                    cached.normal_velocity_change_q10,
+                    constraint.friction_response_q31,
+                );
+                constraint.tangent_velocity_change_q10 = cached
+                    .tangent_velocity_change_q10
+                    .clamp(-tangent_limit, tangent_limit);
+            }
         }
-        if !has_inward_contact_velocity(world, constraints) {
-            break;
+
+        for (index, constraint) in constraints.iter().enumerate() {
+            self.apply_cached_velocity(index, constraint);
         }
     }
-}
 
-fn has_inward_contact_velocity(world: &World, constraints: &[ContactConstraint]) -> bool {
-    constraints.iter().enumerate().any(|(index, constraint)| {
-        if constraint.normal_target_speed_q10 != 0 || constraint.normal.inverse_sum_q24 == 0 {
-            return false;
+    fn apply_cached_velocity(&mut self, index: usize, constraint: &ContactConstraint) {
+        if constraint.normal_velocity_change_q10 == 0 && constraint.tangent_velocity_change_q10 == 0
+        {
+            return;
         }
-        let contact = world.active_contacts[index];
-        let a = &world.bodies[contact.body_a];
-        let b = match contact.body_b {
-            ContactBodyIndex::Dynamic(index_b) => Some(&world.bodies[index_b]),
-            ContactBodyIndex::Static(_) => None,
-        };
-        let speed_a = a.point_speed_along(contact.point, contact.normal);
-        let speed_b = b
-            .map(|body| body.point_speed_along(contact.point, contact.normal))
-            .unwrap_or(0);
-        let a_is_blocked = speed_a > speed_b.max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
-        let b_is_blocked =
-            b.is_some() && -speed_b > (-speed_a).max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
-        a_is_blocked || b_is_blocked
-    })
-}
-
-pub(super) fn prepare_warm_start(world: &mut World, constraints: &mut [ContactConstraint]) {
-    debug_assert_eq!(constraints.len(), world.active_contacts.len());
-    initialize_restitution_targets(world, constraints);
-
-    for (index, constraint) in constraints.iter_mut().enumerate() {
-        if constraint.normal_target_speed_q10 != 0 {
-            continue;
+        let contact = self.active_contacts[index];
+        match contact.body_b {
+            ContactBodyIndex::Static(_) => apply_cached_contact_velocity(
+                &mut self.bodies[contact.body_a],
+                None,
+                &contact,
+                constraint,
+            ),
+            ContactBodyIndex::Dynamic(index_b) => {
+                let (a, b) = two_bodies_mut(&mut self.bodies, contact.body_a, index_b);
+                apply_cached_contact_velocity(a, Some(b), &contact, constraint);
+            }
         }
-        let contact = world.active_contacts[index];
-        let Some(identity) = contact_identity(world, contact) else {
-            continue;
+    }
+
+    /// Removes the remaining inward velocity of existing inelastic contacts and
+    /// stores the removed linear and angular motion on each body. Each visit is a
+    /// direct projection onto the contact's non-penetration half-space; no contact
+    /// lambda is accumulated or cached by this stage.
+    pub(super) fn capture_blocked_contact_impulses(&mut self, constraints: &[ContactConstraint]) {
+        debug_assert_eq!(constraints.len(), self.active_contacts.len());
+        let iterations = self.settings.velocity_iterations.max(1) as usize;
+        for iteration in 0..iterations {
+            for step in 0..constraints.len() {
+                let index = if iteration & 1 == 0 {
+                    constraints.len() - 1 - step
+                } else {
+                    step
+                };
+                if constraints[index].normal_target_speed_q10 != 0 {
+                    continue;
+                }
+                self.project_body_velocities_to_contact(index);
+            }
+            if !self.has_inward_contact_velocity(constraints) {
+                break;
+            }
+        }
+    }
+
+    fn project_body_velocities_to_contact(&mut self, index: usize) {
+        let contact = self.active_contacts[index];
+        let friction_q16 = match contact.body_b {
+            ContactBodyIndex::Static(index_b) => self.bodies[contact.body_a]
+                .material()
+                .combined_friction_raw(self.static_bodies[index_b].material()),
+            ContactBodyIndex::Dynamic(index_b) => self.bodies[contact.body_a]
+                .material()
+                .combined_friction_raw(self.bodies[index_b].material()),
         };
-        let cached = world.hot_contacts[contact.body_a]
-            .find(identity)
-            .or_else(|| match contact.body_b {
-                ContactBodyIndex::Dynamic(index_b) => world.hot_contacts[index_b].find(identity),
+        match contact.body_b {
+            ContactBodyIndex::Static(_) => project_body_velocity_pair(
+                &mut self.bodies[contact.body_a],
+                None,
+                &contact,
+                friction_q16,
+            ),
+            ContactBodyIndex::Dynamic(index_b) => {
+                let (a, b) = two_bodies_mut(&mut self.bodies, contact.body_a, index_b);
+                project_body_velocity_pair(a, Some(b), &contact, friction_q16);
+            }
+        }
+    }
+
+    fn has_inward_contact_velocity(&self, constraints: &[ContactConstraint]) -> bool {
+        constraints.iter().enumerate().any(|(index, constraint)| {
+            if constraint.normal_target_speed_q10 != 0 || constraint.normal.inverse_sum_q24 == 0 {
+                return false;
+            }
+            let contact = self.active_contacts[index];
+            let a = &self.bodies[contact.body_a];
+            let b = match contact.body_b {
+                ContactBodyIndex::Dynamic(index_b) => Some(&self.bodies[index_b]),
                 ContactBodyIndex::Static(_) => None,
-            });
-        if let Some(cached) = cached {
-            constraint.normal_velocity_change_q10 =
-                cached.normal_velocity_change_q10.min(u32::MAX as u64) as u32;
-            let tangent_limit = friction_velocity_change_limit_q10(
-                cached.normal_velocity_change_q10,
-                constraint.friction_response_q31,
-            );
-            constraint.tangent_velocity_change_q10 = cached
-                .tangent_velocity_change_q10
-                .clamp(-tangent_limit, tangent_limit);
-        }
+            };
+            let speed_a = a.point_speed_along(contact.point, contact.normal);
+            let speed_b = b
+                .map(|body| body.point_speed_along(contact.point, contact.normal))
+                .unwrap_or(0);
+            let a_is_blocked = speed_a > speed_b.max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
+            let b_is_blocked = b.is_some()
+                && -speed_b > (-speed_a).max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
+            a_is_blocked || b_is_blocked
+        })
     }
 
-    for (index, constraint) in constraints.iter().enumerate() {
-        apply_cached_velocity(world, index, constraint);
+    fn solve_velocity(&mut self, index: usize, constraint: &mut ContactConstraint) {
+        let contact = self.active_contacts[index];
+        match contact.body_b {
+            ContactBodyIndex::Static(_) => {
+                solve_deferred_contact_velocity(
+                    &mut self.bodies[contact.body_a],
+                    None,
+                    &contact,
+                    constraint,
+                );
+                solve_contact_velocity(
+                    &mut self.bodies[contact.body_a],
+                    None,
+                    &contact,
+                    constraint,
+                );
+            }
+            ContactBodyIndex::Dynamic(index_b) => {
+                let (a, b) = two_bodies_mut(&mut self.bodies, contact.body_a, index_b);
+                solve_deferred_contact_velocity(a, Some(&mut *b), &contact, constraint);
+                solve_contact_velocity(a, Some(b), &contact, constraint);
+            }
+        }
     }
 }
 
@@ -310,25 +376,6 @@ fn contact_identity(world: &World, contact: ActiveContact) -> Option<ContactIden
     })
 }
 
-fn apply_cached_velocity(world: &mut World, index: usize, constraint: &ContactConstraint) {
-    if constraint.normal_velocity_change_q10 == 0 && constraint.tangent_velocity_change_q10 == 0 {
-        return;
-    }
-    let contact = world.active_contacts[index];
-    match contact.body_b {
-        ContactBodyIndex::Static(_) => apply_cached_contact_velocity(
-            &mut world.bodies[contact.body_a],
-            None,
-            &contact,
-            constraint,
-        ),
-        ContactBodyIndex::Dynamic(index_b) => {
-            let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            apply_cached_contact_velocity(a, Some(b), &contact, constraint);
-        }
-    }
-}
-
 fn apply_cached_contact_velocity(
     a: &mut Body,
     mut b: Option<&mut Body>,
@@ -357,55 +404,6 @@ fn apply_cached_contact_velocity(
     );
 }
 
-fn solve_velocity(world: &mut World, index: usize, constraint: &mut ContactConstraint) {
-    let contact = world.active_contacts[index];
-    match contact.body_b {
-        ContactBodyIndex::Static(_) => {
-            solve_deferred_contact_velocity(
-                &mut world.bodies[contact.body_a],
-                None,
-                &contact,
-                constraint,
-            );
-            solve_contact_velocity(
-                &mut world.bodies[contact.body_a],
-                None,
-                &contact,
-                constraint,
-            );
-        }
-        ContactBodyIndex::Dynamic(index_b) => {
-            let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            solve_deferred_contact_velocity(a, Some(&mut *b), &contact, constraint);
-            solve_contact_velocity(a, Some(b), &contact, constraint);
-        }
-    }
-}
-
-fn project_body_velocities_to_contact(world: &mut World, index: usize) {
-    let contact = world.active_contacts[index];
-    let friction_q16 = match contact.body_b {
-        ContactBodyIndex::Static(index_b) => world.bodies[contact.body_a]
-            .material()
-            .combined_friction_raw(world.static_bodies[index_b].material()),
-        ContactBodyIndex::Dynamic(index_b) => world.bodies[contact.body_a]
-            .material()
-            .combined_friction_raw(world.bodies[index_b].material()),
-    };
-    match contact.body_b {
-        ContactBodyIndex::Static(_) => project_body_velocity_pair(
-            &mut world.bodies[contact.body_a],
-            None,
-            &contact,
-            friction_q16,
-        ),
-        ContactBodyIndex::Dynamic(index_b) => {
-            let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            project_body_velocity_pair(a, Some(b), &contact, friction_q16);
-        }
-    }
-}
-
 pub(super) fn correct_positions(world: &mut World) {
     for contact in world.active_contacts.iter().copied() {
         if !contact.key.correct_position() {
@@ -424,7 +422,7 @@ pub(super) fn correct_positions(world: &mut World) {
 
         if let ContactBodyIndex::Static(_) = contact.body_b {
             let [move_x, move_y] = contact.normal.scaled_wide_raw(correction as u64);
-            add_position(&mut world.bodies[contact.body_a], -move_x, -move_y);
+            world.bodies[contact.body_a].add_position(-move_x, -move_y);
             continue;
         }
 
@@ -443,11 +441,11 @@ pub(super) fn correct_positions(world: &mut World) {
         let move_b = div_round(correction as u64 * inverse_b, inverse_sum);
         if inverse_a != 0 {
             let [move_x, move_y] = contact.normal.scaled_wide_raw(move_a);
-            add_position(a, -move_x, -move_y);
+            a.add_position(-move_x, -move_y);
         }
         if inverse_b != 0 {
             let [move_x, move_y] = contact.normal.scaled_wide_raw(move_b);
-            add_position(b, move_x, move_y);
+            b.add_position(move_x, move_y);
         }
     }
 }
@@ -735,21 +733,21 @@ fn apply_contact_impulse(
     let change_a = linear_velocity_change_raw(magnitude, linear_response_a_q31);
     if change_a != 0 {
         let [change_x, change_y] = axis.scaled_wide_raw(change_a);
-        add_velocity(a, -change_x, -change_y);
+        a.add_velocity(-change_x, -change_y);
     }
     let angular_change_a =
         angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q17);
-    add_angular_velocity(a, -angular_change_a);
+    a.add_angular_velocity(-angular_change_a);
 
     if let Some(body) = b {
         let change_b = linear_velocity_change_raw(magnitude, linear_response_b_q31);
         if change_b != 0 {
             let [change_x, change_y] = axis.scaled_wide_raw(change_b);
-            add_velocity(body, change_x, change_y);
+            body.add_velocity(change_x, change_y);
         }
         let angular_change_b =
             angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q17);
-        add_angular_velocity(body, angular_change_b);
+        body.add_angular_velocity(angular_change_b);
     }
 }
 
@@ -819,7 +817,7 @@ fn apply_contact_impulse_and_defer(
     let change_a = linear_velocity_change_raw(magnitude, linear_response_a_q31);
     if change_a != 0 {
         let [change_x, change_y] = axis.scaled_wide_raw(change_a);
-        add_velocity(a, -change_x, -change_y);
+        a.add_velocity(-change_x, -change_y);
         add_deferred_linear_velocity(
             a,
             retain_blocked_velocity(change_x),
@@ -828,14 +826,14 @@ fn apply_contact_impulse_and_defer(
     }
     let angular_change_a =
         angular_velocity_change_raw(impulse_numerator_q10, angular_response_a_q17);
-    add_angular_velocity(a, -angular_change_a);
+    a.add_angular_velocity(-angular_change_a);
     add_deferred_angular_velocity(a, retain_blocked_velocity(angular_change_a));
 
     if let Some(body) = b {
         let change_b = linear_velocity_change_raw(magnitude, linear_response_b_q31);
         if change_b != 0 {
             let [change_x, change_y] = axis.scaled_wide_raw(change_b);
-            add_velocity(body, change_x, change_y);
+            body.add_velocity(change_x, change_y);
             add_deferred_linear_velocity(
                 body,
                 retain_blocked_velocity(-change_x),
@@ -844,7 +842,7 @@ fn apply_contact_impulse_and_defer(
         }
         let angular_change_b =
             angular_velocity_change_raw(impulse_numerator_q10, angular_response_b_q17);
-        add_angular_velocity(body, angular_change_b);
+        body.add_angular_velocity(angular_change_b);
         add_deferred_angular_velocity(body, retain_blocked_velocity(-angular_change_b));
     }
 }
@@ -1212,7 +1210,7 @@ mod tests {
         world.active_contacts.push(contact);
 
         let mut constraints = prepare_constraints(&world);
-        solve_velocities(&mut world, &mut constraints, true);
+        world.solve_velocities(&mut constraints, true);
 
         let a = world.body(BodyId::new(1)).unwrap();
         let b = world.body(BodyId::new(2)).unwrap();
@@ -1241,7 +1239,7 @@ mod tests {
         world.active_contacts.push(contact);
         let constraints = prepare_constraints(&world);
 
-        capture_blocked_contact_impulses(&mut world, &constraints);
+        world.capture_blocked_contact_impulses(&constraints);
 
         let a = &world.bodies[0];
         let b = &world.bodies[1];
@@ -1275,7 +1273,7 @@ mod tests {
         ));
         let constraints = prepare_constraints(&world);
 
-        capture_blocked_contact_impulses(&mut world, &constraints);
+        world.capture_blocked_contact_impulses(&constraints);
 
         assert_eq!(
             world.bodies[0].state().linear_velocity(),
@@ -1309,7 +1307,7 @@ mod tests {
         world.active_contacts.push(contact);
         let constraints = prepare_constraints(&world);
 
-        capture_blocked_contact_impulses(&mut world, &constraints);
+        world.capture_blocked_contact_impulses(&constraints);
 
         assert_eq!(
             world.bodies[0].state().linear_velocity(),
@@ -1349,7 +1347,7 @@ mod tests {
         ));
         let constraints = prepare_constraints(&world);
 
-        capture_blocked_contact_impulses(&mut world, &constraints);
+        world.capture_blocked_contact_impulses(&constraints);
 
         assert_eq!(
             world.bodies[0].state().linear_velocity(),
@@ -1384,7 +1382,7 @@ mod tests {
         world.bodies[0].state_mut().deferred_contact_linear = LinearVelocity::from_raw(101, -101);
         world.bodies[0].state_mut().deferred_contact_angular = AngularVelocity::from_raw(-101);
 
-        decay_deferred_contact_impulses(&mut world);
+        world.decay_deferred_contact_impulses();
 
         assert_eq!(
             world.bodies[0].state().deferred_contact_linear().raw(),
@@ -1423,7 +1421,7 @@ mod tests {
         ));
         let mut constraints = prepare_constraints(&world);
 
-        solve_velocities(&mut world, &mut constraints, false);
+        world.solve_velocities(&mut constraints, false);
 
         assert_eq!(
             world.bodies[0].state().linear_velocity(),
@@ -1459,7 +1457,7 @@ mod tests {
         world.active_contacts.push(contact);
 
         let mut constraints = prepare_constraints(&world);
-        solve_velocities(&mut world, &mut constraints, true);
+        world.solve_velocities(&mut constraints, true);
 
         let body = world.body(BodyId::new(1)).unwrap();
         assert_eq!(body.state().linear_velocity().raw(), [683, 0]);
@@ -1470,7 +1468,7 @@ mod tests {
         );
 
         let after_first_solve = *body.state();
-        solve_velocities(&mut world, &mut constraints, false);
+        world.solve_velocities(&mut constraints, false);
         assert_eq!(
             *world.body(BodyId::new(1)).unwrap().state(),
             after_first_solve
@@ -1574,7 +1572,7 @@ mod tests {
         world.active_contacts.push(contact);
 
         let mut constraints = prepare_constraints(&world);
-        solve_velocities(&mut world, &mut constraints, true);
+        world.solve_velocities(&mut constraints, true);
 
         let a = world.body(BodyId::new(1)).unwrap();
         let b = world.body(BodyId::new(2)).unwrap();

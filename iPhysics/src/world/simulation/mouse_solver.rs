@@ -1,7 +1,4 @@
-use super::constraint::{
-    apply_body_impulse, contact_inverse_mass_q24, div_round_signed,
-    round_shift_signed,
-};
+use super::constraint::{contact_inverse_mass_q24, div_round_signed, round_shift_signed};
 use crate::body::Body;
 use crate::world::World;
 use crate::{GeometryPoint, UnitVector};
@@ -12,97 +9,105 @@ pub(super) struct MouseImpulseState {
     impulse_q10: [i64; 2],
 }
 
-pub(super) fn solve_velocities(
-    world: &mut World,
-    impulse_states: &mut [MouseImpulseState],
-    reverse: bool,
-) {
-    debug_assert_eq!(impulse_states.len(), world.mouse_joints.len());
+impl World {
+    pub(super) fn solve_mouse_joints_velocities(
+        &mut self,
+        impulse_states: &mut [MouseImpulseState],
+        reverse: bool,
+    ) {
+        debug_assert_eq!(impulse_states.len(), self.mouse_joints.len());
 
-    if reverse {
-        for index in (0..world.mouse_joints.len()).rev() {
-            solve_velocity(world, index, &mut impulse_states[index]);
+        if reverse {
+            for index in (0..self.mouse_joints.len()).rev() {
+                self.solve_velocity_by_mouse_joint_index(index, &mut impulse_states[index]);
+            }
+        } else {
+            for (index, impulse_state) in impulse_states.iter_mut().enumerate() {
+                self.solve_velocity_by_mouse_joint_index(index, impulse_state);
+            }
         }
-    } else {
-        for (index, impulse_state) in impulse_states.iter_mut().enumerate() {
-            solve_velocity(world, index, impulse_state);
-        }
+    }
+
+    fn solve_velocity_by_mouse_joint_index(
+        &mut self,
+        joint_index: usize,
+        impulse_state: &mut MouseImpulseState,
+    ) {
+        let joint = self.mouse_joints[joint_index];
+        let Ok(body_index) = self.bodies.binary_search_by_key(&joint.body(), Body::id) else {
+            return;
+        };
+        let body = &mut self.bodies[body_index];
+        let anchor = body
+            .state()
+            .transform()
+            .apply_geometry(joint.local_anchor());
+        let error = GeometryPoint::from(joint.target()) - anchor;
+        let [error_x, error_y] = error.raw();
+        let response = joint.response_raw() as i64;
+        let desired_velocity = [
+            round_shift_signed(error_x as i64 * response, 16),
+            round_shift_signed(error_y as i64 * response, 16),
+        ];
+        let max_impulse = joint.max_force().impulse_per_tick_q10();
+
+        body.solve_mouse_constraint(anchor, desired_velocity, max_impulse, impulse_state);
     }
 }
 
-fn solve_velocity(world: &mut World, joint_index: usize, impulse_state: &mut MouseImpulseState) {
-    let joint = world.mouse_joints[joint_index];
-    let Ok(body_index) = world.bodies.binary_search_by_key(&joint.body(), Body::id) else {
-        return;
-    };
-    let body = &mut world.bodies[body_index];
-    let anchor = body
-        .state()
-        .transform()
-        .apply_geometry(joint.local_anchor());
-    let error = GeometryPoint::from(joint.target()) - anchor;
-    let [error_x, error_y] = error.raw();
-    let response = joint.response_raw() as i64;
-    let desired_velocity = [
-        round_shift_signed(error_x as i64 * response, 16),
-        round_shift_signed(error_y as i64 * response, 16),
-    ];
-    let max_impulse = joint.max_force().impulse_per_tick_q10();
+impl Body {
+    fn solve_mouse_constraint(
+        &mut self,
+        anchor: GeometryPoint,
+        desired_velocity_q10: [i64; 2],
+        max_impulse_q10: u64,
+        impulse_state: &mut MouseImpulseState,
+    ) {
+        let x_axis = UnitVector::X;
+        let y_axis = x_axis.perpendicular();
+        let lever_x = self.contact_lever_cross_axis(anchor, x_axis);
+        let lever_y = self.contact_lever_cross_axis(anchor, y_axis);
+        let inverse_xx = contact_inverse_mass_q24(self, None, lever_x, 0);
+        let inverse_yy = contact_inverse_mass_q24(self, None, lever_y, 0);
+        let inverse_xy =
+            rotational_inverse_mass_cross_q24(lever_x, lever_y, self.inverse_inertia_q40());
+        let determinant = (inverse_xx as u128 * inverse_yy as u128)
+            .saturating_sub(inverse_xy.unsigned_abs() * inverse_xy.unsigned_abs());
+        if determinant == 0 {
+            return;
+        }
 
-    solve_constraint(body, anchor, desired_velocity, max_impulse, impulse_state);
-}
+        let velocity_change_x =
+            desired_velocity_q10[0].saturating_sub(self.point_speed_along(anchor, x_axis));
+        let velocity_change_y =
+            desired_velocity_q10[1].saturating_sub(self.point_speed_along(anchor, y_axis));
+        let impulse_change = [
+            div_round_signed(
+                (inverse_yy as i128 * velocity_change_x as i128
+                    - inverse_xy * velocity_change_y as i128)
+                    << 24,
+                determinant,
+            ),
+            div_round_signed(
+                (inverse_xx as i128 * velocity_change_y as i128
+                    - inverse_xy * velocity_change_x as i128)
+                    << 24,
+                determinant,
+            ),
+        ];
+        let previous = impulse_state.impulse_q10;
+        let mut candidate = [
+            previous[0].saturating_add(impulse_change[0]),
+            previous[1].saturating_add(impulse_change[1]),
+        ];
+        candidate = clamp_impulse_vector(candidate, max_impulse_q10);
+        impulse_state.impulse_q10 = candidate;
 
-fn solve_constraint(
-    body: &mut Body,
-    anchor: GeometryPoint,
-    desired_velocity_q10: [i64; 2],
-    max_impulse_q10: u64,
-    impulse_state: &mut MouseImpulseState,
-) {
-    let x_axis = UnitVector::X;
-    let y_axis = x_axis.perpendicular();
-    let lever_x = body.contact_lever_cross_axis(anchor, x_axis);
-    let lever_y = body.contact_lever_cross_axis(anchor, y_axis);
-    let inverse_xx = contact_inverse_mass_q24(body, None, lever_x, 0);
-    let inverse_yy = contact_inverse_mass_q24(body, None, lever_y, 0);
-    let inverse_xy =
-        rotational_inverse_mass_cross_q24(lever_x, lever_y, body.inverse_inertia_q40());
-    let determinant = (inverse_xx as u128 * inverse_yy as u128)
-        .saturating_sub(inverse_xy.unsigned_abs() * inverse_xy.unsigned_abs());
-    if determinant == 0 {
-        return;
-    }
-
-    let velocity_change_x =
-        desired_velocity_q10[0].saturating_sub(body.point_speed_along(anchor, x_axis));
-    let velocity_change_y =
-        desired_velocity_q10[1].saturating_sub(body.point_speed_along(anchor, y_axis));
-    let impulse_change = [
-        div_round_signed(
-            (inverse_yy as i128 * velocity_change_x as i128
-                - inverse_xy * velocity_change_y as i128)
-                << 24,
-            determinant,
-        ),
-        div_round_signed(
-            (inverse_xx as i128 * velocity_change_y as i128
-                - inverse_xy * velocity_change_x as i128)
-                << 24,
-            determinant,
-        ),
-    ];
-    let previous = impulse_state.impulse_q10;
-    let mut candidate = [
-        previous[0].saturating_add(impulse_change[0]),
-        previous[1].saturating_add(impulse_change[1]),
-    ];
-    candidate = clamp_impulse_vector(candidate, max_impulse_q10);
-    impulse_state.impulse_q10 = candidate;
-
-    for (impulse_component, impulse_axis) in [x_axis, y_axis].into_iter().enumerate() {
-        let applied = candidate[impulse_component] - previous[impulse_component];
-        let impulse_lever = body.contact_lever_cross_axis(anchor, impulse_axis);
-        apply_body_impulse(body, impulse_axis, applied, impulse_lever);
+        for (impulse_component, impulse_axis) in [x_axis, y_axis].into_iter().enumerate() {
+            let applied = candidate[impulse_component] - previous[impulse_component];
+            let impulse_lever = self.contact_lever_cross_axis(anchor, impulse_axis);
+            self.apply_body_impulse(impulse_axis, applied, impulse_lever);
+        }
     }
 }
 

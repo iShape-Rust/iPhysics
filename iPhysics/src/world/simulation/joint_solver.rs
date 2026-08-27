@@ -1,11 +1,8 @@
-use super::constraint::{
-    apply_body_impulse, div_round_signed,
-    round_shift_signed, scalar_inverse_mass_q24,
-};
+use super::constraint::{div_round_signed, round_shift_signed, scalar_inverse_mass_q24};
+use crate::UnitVector;
 use crate::body::BodyId;
 use crate::quantity::{Length, Position};
 use crate::world::World;
-use crate::UnitVector;
 use crate::world::body::BodyIndex;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,157 +17,154 @@ pub(super) struct RopeImpulseState {
     accumulated_impulse_q10: i64,
 }
 
-pub(super) fn solve_distance_velocities(
-    world: &mut World,
-    states: &mut [DistanceImpulseState],
-    reverse: bool,
-) {
-    debug_assert_eq!(states.len(), world.distance_joints.len());
-    if reverse {
-        for index in (0..world.distance_joints.len()).rev() {
-            solve_distance_velocity(world, index, &mut states[index]);
-        }
-    } else {
-        for (index, state) in states.iter_mut().enumerate() {
-            solve_distance_velocity(world, index, state);
-        }
-    }
-}
-
-pub(super) fn solve_rope_velocities(
-    world: &mut World,
-    states: &mut [RopeImpulseState],
-    reverse: bool,
-) {
-    debug_assert_eq!(states.len(), world.rope_joints.len());
-    if reverse {
-        for index in (0..world.rope_joints.len()).rev() {
-            solve_rope_velocity(world, index, &mut states[index]);
-        }
-    } else {
-        for (index, state) in states.iter_mut().enumerate() {
-            solve_rope_velocity(world, index, state);
+impl World {
+    pub(super) fn solve_distance_joints_velocities(
+        &mut self,
+        states: &mut [DistanceImpulseState],
+        reverse: bool,
+    ) {
+        debug_assert_eq!(states.len(), self.distance_joints.len());
+        if reverse {
+            for index in (0..self.distance_joints.len()).rev() {
+                self.solve_distance_velocity(index, &mut states[index]);
+            }
+        } else {
+            for (index, state) in states.iter_mut().enumerate() {
+                self.solve_distance_velocity(index, state);
+            }
         }
     }
-}
 
-fn solve_distance_velocity(
-    world: &mut World,
-    joint_index: usize,
-    state: &mut DistanceImpulseState,
-) {
-    let joint = world.distance_joints[joint_index];
-    solve_scalar_constraint(
-        world,
-        joint.body_a(),
-        joint.local_anchor_a(),
-        joint.body_b(),
-        joint.local_anchor_b(),
-        joint.length(),
-        joint.max_force().impulse_per_tick_q10(),
-        joint.response_raw(),
-        false,
-        &mut state.accumulated_impulse_q10,
-    );
-}
-
-fn solve_rope_velocity(world: &mut World, joint_index: usize, state: &mut RopeImpulseState) {
-    let joint = world.rope_joints[joint_index];
-    solve_scalar_constraint(
-        world,
-        joint.body_a(),
-        joint.local_anchor_a(),
-        joint.body_b(),
-        joint.local_anchor_b(),
-        joint.max_length(),
-        joint.max_force().impulse_per_tick_q10(),
-        joint.response_raw(),
-        true,
-        &mut state.accumulated_impulse_q10,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn solve_scalar_constraint(
-    world: &mut World,
-    body_a: BodyId,
-    local_anchor_a: Position,
-    body_b: BodyId,
-    local_anchor_b: Position,
-    target_length: Length,
-    max_impulse_q10: u64,
-    response_q16: u32,
-    pulling_only: bool,
-    accumulated_impulse_q10: &mut i64,
-) {
-    let Some(endpoint_a) = world.resolve_endpoint(body_a) else {
-        return;
-    };
-    let Some(endpoint_b) = world.resolve_endpoint(body_b) else {
-        return;
-    };
-    let anchor_a = world.endpoint_anchor(endpoint_a, local_anchor_a);
-    let anchor_b = world.endpoint_anchor(endpoint_b, local_anchor_b);
-    let delta = anchor_b - anchor_a;
-    let current_length = delta.squared_magnitude().isqrt();
-
-    if pulling_only && current_length < target_length.raw() as u64 {
-        *accumulated_impulse_q10 = 0;
-        return;
+    fn solve_distance_velocity(&mut self, joint_index: usize, state: &mut DistanceImpulseState) {
+        let joint = self.distance_joints[joint_index];
+        self.solve_scalar_constraint(
+            joint.body_a(),
+            joint.local_anchor_a(),
+            joint.body_b(),
+            joint.local_anchor_b(),
+            joint.length(),
+            joint.max_force().impulse_per_tick_q10(),
+            joint.response_raw(),
+            false,
+            &mut state.accumulated_impulse_q10,
+        );
     }
 
-    // The deterministic fallback also defines how a zero-separation Distance
-    // joint with a positive target length starts expanding.
-    let axis = UnitVector::normalized_with_length(delta, current_length).unwrap_or(UnitVector::X);
-    let dynamic_a = world.endpoint_body(endpoint_a);
-    let dynamic_b = world.endpoint_body(endpoint_b);
-    let lever_a = dynamic_a
-        .map(|body| body.contact_lever_cross_axis(anchor_a, axis))
-        .unwrap_or(0);
-    let lever_b = dynamic_b
-        .map(|body| body.contact_lever_cross_axis(anchor_b, axis))
-        .unwrap_or(0);
-    let inverse_mass = scalar_inverse_mass_q24(dynamic_a, dynamic_b, lever_a, lever_b);
-    if inverse_mass == 0 {
-        return;
+    pub(super) fn solve_rope_joints_velocities(
+        &mut self,
+        states: &mut [RopeImpulseState],
+        reverse: bool,
+    ) {
+        debug_assert_eq!(states.len(), self.rope_joints.len());
+        if reverse {
+            for index in (0..self.rope_joints.len()).rev() {
+                self.solve_rope_velocity(index, &mut states[index]);
+            }
+        } else {
+            for (index, state) in states.iter_mut().enumerate() {
+                self.solve_rope_velocity(index, state);
+            }
+        }
     }
 
-    // Axis is A -> B. A positive error means the anchors are too far apart,
-    // so the desired B-relative-to-A speed and resulting impulse are negative.
-    let error_q16 = current_length as i64 - target_length.raw() as i64;
-    let desired_speed_q10 = -round_shift_signed(error_q16 * response_q16 as i64, 16);
-    let relative_speed_q10 = world.endpoint_speed(endpoint_b, anchor_b, axis)
-        - world.endpoint_speed(endpoint_a, anchor_a, axis);
-    let velocity_change_q10 = desired_speed_q10.saturating_sub(relative_speed_q10);
-    let impulse_change_q10 =
-        div_round_signed((velocity_change_q10 as i128) << 24, inverse_mass as u128);
-
-    let previous = *accumulated_impulse_q10;
-    let max_impulse = max_impulse_q10.min(i64::MAX as u64) as i64;
-    let candidate = previous.saturating_add(impulse_change_q10);
-    let candidate = if pulling_only {
-        candidate.clamp(-max_impulse, 0)
-    } else {
-        candidate.clamp(-max_impulse, max_impulse)
-    };
-    *accumulated_impulse_q10 = candidate;
-
-    let applied = candidate - previous;
-    if applied == 0 {
-        return;
+    fn solve_rope_velocity(&mut self, joint_index: usize, state: &mut RopeImpulseState) {
+        let joint = self.rope_joints[joint_index];
+        self.solve_scalar_constraint(
+            joint.body_a(),
+            joint.local_anchor_a(),
+            joint.body_b(),
+            joint.local_anchor_b(),
+            joint.max_length(),
+            joint.max_force().impulse_per_tick_q10(),
+            joint.response_raw(),
+            true,
+            &mut state.accumulated_impulse_q10,
+        );
     }
-    if let BodyIndex::Dynamic(index) = endpoint_a {
-        apply_body_impulse(&mut world.bodies[index], axis, -applied, lever_a);
-    }
-    if let BodyIndex::Dynamic(index) = endpoint_b {
-        apply_body_impulse(&mut world.bodies[index], axis, applied, lever_b);
+
+    #[allow(clippy::too_many_arguments)]
+    fn solve_scalar_constraint(
+        &mut self,
+        body_a: BodyId,
+        local_anchor_a: Position,
+        body_b: BodyId,
+        local_anchor_b: Position,
+        target_length: Length,
+        max_impulse_q10: u64,
+        response_q16: u32,
+        pulling_only: bool,
+        accumulated_impulse_q10: &mut i64,
+    ) {
+        let Some(endpoint_a) = self.resolve_endpoint(body_a) else {
+            return;
+        };
+        let Some(endpoint_b) = self.resolve_endpoint(body_b) else {
+            return;
+        };
+        let anchor_a = self.endpoint_anchor(endpoint_a, local_anchor_a);
+        let anchor_b = self.endpoint_anchor(endpoint_b, local_anchor_b);
+        let delta = anchor_b - anchor_a;
+        let current_length = delta.squared_magnitude().isqrt();
+
+        if pulling_only && current_length < target_length.raw() as u64 {
+            *accumulated_impulse_q10 = 0;
+            return;
+        }
+
+        // The deterministic fallback also defines how a zero-separation Distance
+        // joint with a positive target length starts expanding.
+        let axis =
+            UnitVector::normalized_with_length(delta, current_length).unwrap_or(UnitVector::X);
+        let dynamic_a = self.endpoint_body(endpoint_a);
+        let dynamic_b = self.endpoint_body(endpoint_b);
+        let lever_a = dynamic_a
+            .map(|body| body.contact_lever_cross_axis(anchor_a, axis))
+            .unwrap_or(0);
+        let lever_b = dynamic_b
+            .map(|body| body.contact_lever_cross_axis(anchor_b, axis))
+            .unwrap_or(0);
+        let inverse_mass = scalar_inverse_mass_q24(dynamic_a, dynamic_b, lever_a, lever_b);
+        if inverse_mass == 0 {
+            return;
+        }
+
+        // Axis is A -> B. A positive error means the anchors are too far apart,
+        // so the desired B-relative-to-A speed and resulting impulse are negative.
+        let error_q16 = current_length as i64 - target_length.raw() as i64;
+        let desired_speed_q10 = -round_shift_signed(error_q16 * response_q16 as i64, 16);
+        let relative_speed_q10 = self.endpoint_speed(endpoint_b, anchor_b, axis)
+            - self.endpoint_speed(endpoint_a, anchor_a, axis);
+        let velocity_change_q10 = desired_speed_q10.saturating_sub(relative_speed_q10);
+        let impulse_change_q10 =
+            div_round_signed((velocity_change_q10 as i128) << 24, inverse_mass as u128);
+
+        let previous = *accumulated_impulse_q10;
+        let max_impulse = max_impulse_q10.min(i64::MAX as u64) as i64;
+        let candidate = previous.saturating_add(impulse_change_q10);
+        let candidate = if pulling_only {
+            candidate.clamp(-max_impulse, 0)
+        } else {
+            candidate.clamp(-max_impulse, max_impulse)
+        };
+        *accumulated_impulse_q10 = candidate;
+
+        let applied = candidate - previous;
+        if applied == 0 {
+            return;
+        }
+        if let BodyIndex::Dynamic(index) = endpoint_a {
+            self.bodies[index].apply_body_impulse(axis, -applied, lever_a);
+        }
+        if let BodyIndex::Dynamic(index) = endpoint_b {
+            self.bodies[index].apply_body_impulse(axis, applied, lever_b);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::Body;
     use super::*;
+    use crate::Body;
     use crate::body::{BodyState, Material, SleepConfig, StaticBody};
     use crate::collider::Circle;
     use crate::joint::{DistanceJoint, RopeJoint};
@@ -267,7 +261,7 @@ mod tests {
             .add_distance_joint(distance(1, 2, 1.0, HIGH_FORCE))
             .unwrap();
         let mut long_state = DistanceImpulseState::default();
-        solve_distance_velocity(&mut too_long, 0, &mut long_state);
+        too_long.solve_distance_velocity(0, &mut long_state);
 
         assert!(long_state.accumulated_impulse_q10 < 0);
         assert!(
@@ -300,7 +294,7 @@ mod tests {
             .add_distance_joint(distance(1, 2, 2.0, HIGH_FORCE))
             .unwrap();
         let mut short_state = DistanceImpulseState::default();
-        solve_distance_velocity(&mut too_short, 0, &mut short_state);
+        too_short.solve_distance_velocity(0, &mut short_state);
 
         assert!(short_state.accumulated_impulse_q10 > 0);
         assert!(
@@ -448,7 +442,7 @@ mod tests {
         taut.add_body(dynamic_body(2, 2.0, 0.0, 3.0, 0.0)).unwrap();
         taut.add_rope_joint(rope(1, 2, 2.0, HIGH_FORCE)).unwrap();
         let mut state = RopeImpulseState::default();
-        solve_rope_velocity(&mut taut, 0, &mut state);
+        taut.solve_rope_velocity(0, &mut state);
 
         assert!(state.accumulated_impulse_q10 < 0);
         assert_eq!(
@@ -467,7 +461,7 @@ mod tests {
         world.add_rope_joint(rope(1, 2, 2.0, HIGH_FORCE)).unwrap();
         let mut state = RopeImpulseState::default();
 
-        solve_rope_velocity(&mut world, 0, &mut state);
+        world.solve_rope_velocity(0, &mut state);
 
         assert_eq!(state.accumulated_impulse_q10, 0);
         assert_eq!(

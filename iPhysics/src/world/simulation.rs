@@ -1,4 +1,4 @@
-mod constraint;
+pub(crate) mod constraint;
 mod contact_detection;
 mod contact_solver;
 mod joint_solver;
@@ -26,10 +26,10 @@ impl World {
 
         let mut stats = self.build_contacts();
         self.wake_impacted_bodies();
-        contact_solver::decay_deferred_contact_impulses(self);
+        self.decay_deferred_contact_impulses();
 
         let mut contact_constraints = contact_solver::prepare_constraints(self);
-        contact_solver::prepare_warm_start(self, &mut contact_constraints);
+        self.prepare_warm_start(&mut contact_constraints);
         let mut mouse_states =
             vec![mouse_solver::MouseImpulseState::default(); self.mouse_joints.len()];
         let mut distance_states =
@@ -38,13 +38,13 @@ impl World {
             vec![joint_solver::RopeImpulseState::default(); self.rope_joints.len()];
         let mut reverse = false;
         for _ in 0..self.settings.velocity_iterations.max(1) {
-            joint_solver::solve_distance_velocities(self, &mut distance_states, reverse);
-            joint_solver::solve_rope_velocities(self, &mut rope_states, reverse);
-            mouse_solver::solve_velocities(self, &mut mouse_states, reverse);
-            contact_solver::solve_velocities(self, &mut contact_constraints, false);
+            self.solve_distance_joints_velocities(&mut distance_states, reverse);
+            self.solve_rope_joints_velocities(&mut rope_states, reverse);
+            self.solve_mouse_joints_velocities(&mut mouse_states, reverse);
+            self.solve_velocities(&mut contact_constraints, false);
             reverse = !reverse;
         }
-        contact_solver::capture_blocked_contact_impulses(self, &contact_constraints);
+        self.capture_blocked_contact_impulses(&contact_constraints);
         contact_solver::rebuild_contact_cache(self, &contact_constraints);
         contact_solver::correct_positions(self);
         self.integrate_transforms();
@@ -90,8 +90,8 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use crate::Body;
     use super::*;
+    use crate::Body;
     use crate::body::{BodyId, BodyState, Material, SleepConfig, StaticBody};
     use crate::collider::Circle;
     use crate::quantity::{

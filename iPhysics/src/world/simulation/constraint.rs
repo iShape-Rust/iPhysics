@@ -1,5 +1,5 @@
 use crate::body::Body;
-use crate::quantity::{AngularVelocity, LinearVelocity, Position};
+use crate::quantity::LinearVelocity;
 use crate::{GeometryPoint, UnitVector};
 
 pub(super) const MAX_RELATIVE_CONTACT_SPEED_RAW: i32 = 4 * LinearVelocity::MAX_VELOCITY;
@@ -93,61 +93,10 @@ fn rotational_inverse_mass_q24(lever_q16: i32, inverse_inertia_q40: u64) -> u64 
     result.min(u64::MAX as u128) as u64
 }
 
-pub(super) fn add_velocity(body: &mut Body, dx: i64, dy: i64) {
-    let [x, y] = body.state().linear_velocity().raw();
-    body.state_mut().linear_velocity =
-        LinearVelocity::from_wide_saturated(x as i64 + dx, y as i64 + dy);
-}
-
-pub(super) fn add_angular_velocity(body: &mut Body, delta: i64) {
-    let raw = (body.state().angular_velocity().raw() as i64).saturating_add(delta);
-    body.state_mut().angular_velocity = AngularVelocity::from_wide_saturated(raw);
-}
-
-pub(super) fn add_position(body: &mut Body, dx: i64, dy: i64) {
-    let [x, y] = body.state().transform().position.raw();
-    body.state_mut().transform.position = Position::from_i64(x as i64 + dx, y as i64 + dy);
-}
-
 pub(super) fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut Body, &mut Body) {
     debug_assert!(a < b);
     let (left, right) = bodies.split_at_mut(b);
     (&mut left[a], &mut right[0])
-}
-
-pub(super) fn apply_body_impulse(
-    body: &mut Body,
-    axis: UnitVector,
-    impulse_q10: i64,
-    lever_q16: i32,
-) {
-    if impulse_q10 == 0 {
-        return;
-    }
-
-    let inverse_mass = body.inverse_mass_q24() as u64;
-    // Force is Q16/u32, so its per-tick Q10 impulse is at most 2^20 and the
-    // signed linear product fits i64.
-    let linear_change = round_shift_signed(impulse_q10 * inverse_mass as i64, 24);
-    let [change_x, change_y] = axis.scaled_wide_raw(linear_change.unsigned_abs());
-    if linear_change < 0 {
-        add_velocity(body, -change_x, -change_y);
-    } else {
-        add_velocity(body, change_x, change_y);
-    }
-
-    let negative_angular = (impulse_q10 < 0) ^ (lever_q16 < 0);
-    let angular_product = impulse_q10.unsigned_abs() as u128
-        * body.inverse_inertia_q40() as u128
-        * lever_q16.unsigned_abs() as u128;
-    let angular_magnitude = (angular_product + (1_u128 << 49)) >> 50;
-    let angular_magnitude = angular_magnitude.min(AngularVelocity::MAX_CHANGE as u128) as i64;
-    let angular_change = if negative_angular {
-        -angular_magnitude
-    } else {
-        angular_magnitude
-    };
-    add_angular_velocity(body, angular_change);
 }
 
 #[inline(always)]
@@ -159,7 +108,7 @@ pub(super) fn div_round_signed(numerator: i128, denominator: u128) -> i64 {
 }
 
 #[inline(always)]
-pub(super) fn round_shift_signed(value: i64, shift: u32) -> i64 {
+pub(crate) fn round_shift_signed(value: i64, shift: u32) -> i64 {
     let rounded = (value.unsigned_abs() + (1_u64 << (shift - 1))) >> shift;
     if value < 0 {
         -(rounded as i64)

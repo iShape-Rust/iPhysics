@@ -1,7 +1,7 @@
-use alloc::vec;
-use crate::{Body, BodyId, RopeJoint, StepStats, World};
 use crate::world::ContactBodyIndex;
 use crate::world::simulation::constraint::{relative_normal_speed, two_bodies_mut};
+use crate::{Body, BodyId, RopeJoint, StepStats, World};
+use alloc::vec;
 
 const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
@@ -129,7 +129,6 @@ impl World {
             }
         }
     }
-
 
     fn rope_is_taut(&self, joint: RopeJoint) -> bool {
         let Some(endpoint_a) = self.resolve_endpoint(joint.body_a()) else {
