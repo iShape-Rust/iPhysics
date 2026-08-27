@@ -138,19 +138,9 @@ fn clamp_impulse_vector(candidate: [i64; 2], max_impulse: u64) -> [i64; 2] {
 
     let magnitude = magnitude_squared.isqrt();
     [
-        scale_signed(candidate[0], max_impulse, magnitude),
-        scale_signed(candidate[1], max_impulse, magnitude),
+        (candidate[0] as i128 * max_impulse as i128).div_round_signed(magnitude),
+        (candidate[1] as i128 * max_impulse as i128).div_round_signed(magnitude),
     ]
-}
-
-#[inline(always)]
-fn scale_signed(value: i64, numerator: u64, denominator: u128) -> i64 {
-    let magnitude = value.unsigned_abs() as u128 * numerator as u128 / denominator;
-    if value < 0 {
-        -(magnitude as i64)
-    } else {
-        magnitude as i64
-    }
 }
 
 #[cfg(test)]
