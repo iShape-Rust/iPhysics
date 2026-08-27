@@ -78,7 +78,7 @@ impl World {
             }
         }
     }
-    pub(super) fn wake_distance_joints_bodies(&mut self) {
+    pub(super) fn wake_distance_and_rope_joints_bodies(&mut self) {
         // Propagate wake state through a whole joint island. Repeating to a fixed
         // point avoids making the result depend on joint storage order.
         loop {

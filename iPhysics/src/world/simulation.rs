@@ -20,7 +20,7 @@ pub struct StepStats {
 impl World {
     pub fn step(&mut self) -> StepStats {
         self.wake_mouse_joints_bodies();
-        self.wake_distance_joints_bodies();
+        self.wake_distance_and_rope_joints_bodies();
         self.integrate_velocities();
 
         let mut stats = self.build_contacts();
