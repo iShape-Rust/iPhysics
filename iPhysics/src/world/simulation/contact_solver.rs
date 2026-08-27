@@ -1,3 +1,4 @@
+use alloc::vec;
 use super::constraint::{
     MAX_RELATIVE_CONTACT_SPEED_RAW, relative_speed_along_levers, scalar_inverse_mass_q24,
     two_bodies_mut,
@@ -328,7 +329,7 @@ impl World {
 
     pub(super) fn rebuild_contact_cache(&mut self, constraints: &[ContactConstraint]) {
         debug_assert_eq!(constraints.len(), self.active_contacts.len());
-        let mut next = alloc::vec![HotContacts::EMPTY; self.bodies.len()];
+        let mut next = vec![HotContacts::EMPTY; self.bodies.len()];
         for (index, constraint) in constraints.iter().copied().enumerate() {
             if constraint.normal_target_speed_q10 != 0 || constraint.normal_velocity_change_q10 == 0
             {
