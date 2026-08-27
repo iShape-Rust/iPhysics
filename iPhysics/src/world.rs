@@ -1,6 +1,7 @@
 mod contact_cache;
 mod settings;
 mod simulation;
+mod body;
 
 use crate::body::{Body, BodyId, StaticBody};
 use crate::collision::{Contact, ContactKey};

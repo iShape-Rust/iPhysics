@@ -3,11 +3,11 @@ mod contact_detection;
 mod contact_solver;
 mod joint_solver;
 mod mouse_solver;
+mod sleep;
 
 pub(in crate::world) use contact_detection::BroadPhaseScratch;
 
-use super::{ContactBodyIndex, World};
-use crate::body::Body;
+use super::World;
 use alloc::vec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -20,12 +20,12 @@ pub struct StepStats {
 
 impl World {
     pub fn step(&mut self) -> StepStats {
-        mouse_solver::wake_bodies(self);
-        joint_solver::wake_connected_bodies(self);
+        self.wake_mouse_joints_bodies();
+        self.wake_distance_joints_bodies();
         self.integrate_velocities();
 
         let mut stats = self.build_contacts();
-        contact_detection::wake_impacted_bodies(self);
+        self.wake_impacted_bodies();
         contact_solver::decay_deferred_contact_impulses(self);
 
         let mut contact_constraints = contact_solver::prepare_constraints(self);
@@ -86,40 +86,11 @@ impl World {
             body.state_mut().transform = next;
         }
     }
-
-    fn update_sleep_states(&mut self, stats: &mut StepStats) {
-        let mut has_contact = vec![false; self.bodies.len()];
-        for contact in self.active_contacts.iter().copied() {
-            has_contact[contact.body_a] = true;
-            if let ContactBodyIndex::Dynamic(index_b) = contact.body_b {
-                has_contact[index_b] = true;
-            }
-        }
-
-        let mut has_mouse_joint = vec![false; self.bodies.len()];
-        for joint in &self.mouse_joints {
-            if let Ok(index) = self.bodies.binary_search_by_key(&joint.body(), Body::id) {
-                has_mouse_joint[index] = true;
-            }
-        }
-
-        let mut has_joint_constraint = vec![false; self.bodies.len()];
-        joint_solver::mark_sleep_constraints(self, &mut has_joint_constraint);
-
-        for (index, body) in self.bodies.iter_mut().enumerate() {
-            body.state_mut().update_sleep(
-                (has_contact[index] || has_joint_constraint[index]) && !has_mouse_joint[index],
-                self.settings.sleep,
-            );
-            if body.state().is_sleeping() {
-                stats.sleeping_bodies += 1;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::Body;
     use super::*;
     use crate::body::{BodyId, BodyState, Material, SleepConfig, StaticBody};
     use crate::collider::Circle;

@@ -1,6 +1,6 @@
 use super::constraint::{
-    apply_body_impulse, contact_inverse_mass_q24, contact_lever_cross_axis, div_round_signed,
-    point_speed_along, round_shift_signed,
+    apply_body_impulse, contact_inverse_mass_q24, div_round_signed,
+    round_shift_signed,
 };
 use crate::body::Body;
 use crate::world::World;
@@ -10,14 +10,6 @@ use crate::{GeometryPoint, UnitVector};
 pub(super) struct MouseImpulseState {
     /// Accumulated world-space impulse in Q10 kg*m/s.
     impulse_q10: [i64; 2],
-}
-
-pub(super) fn wake_bodies(world: &mut World) {
-    for joint in &world.mouse_joints {
-        if let Ok(index) = world.bodies.binary_search_by_key(&joint.body(), Body::id) {
-            world.bodies[index].state_mut().wake();
-        }
-    }
 }
 
 pub(super) fn solve_velocities(
@@ -69,8 +61,8 @@ fn solve_constraint(
 ) {
     let x_axis = UnitVector::X;
     let y_axis = x_axis.perpendicular();
-    let lever_x = contact_lever_cross_axis(body, anchor, x_axis);
-    let lever_y = contact_lever_cross_axis(body, anchor, y_axis);
+    let lever_x = body.contact_lever_cross_axis(anchor, x_axis);
+    let lever_y = body.contact_lever_cross_axis(anchor, y_axis);
     let inverse_xx = contact_inverse_mass_q24(body, None, lever_x, 0);
     let inverse_yy = contact_inverse_mass_q24(body, None, lever_y, 0);
     let inverse_xy =
@@ -82,9 +74,9 @@ fn solve_constraint(
     }
 
     let velocity_change_x =
-        desired_velocity_q10[0].saturating_sub(point_speed_along(body, anchor, x_axis));
+        desired_velocity_q10[0].saturating_sub(body.point_speed_along(anchor, x_axis));
     let velocity_change_y =
-        desired_velocity_q10[1].saturating_sub(point_speed_along(body, anchor, y_axis));
+        desired_velocity_q10[1].saturating_sub(body.point_speed_along(anchor, y_axis));
     let impulse_change = [
         div_round_signed(
             (inverse_yy as i128 * velocity_change_x as i128
@@ -109,7 +101,7 @@ fn solve_constraint(
 
     for (impulse_component, impulse_axis) in [x_axis, y_axis].into_iter().enumerate() {
         let applied = candidate[impulse_component] - previous[impulse_component];
-        let impulse_lever = contact_lever_cross_axis(body, anchor, impulse_axis);
+        let impulse_lever = body.contact_lever_cross_axis(anchor, impulse_axis);
         apply_body_impulse(body, impulse_axis, applied, impulse_lever);
     }
 }

@@ -2,7 +2,6 @@ mod brute_force;
 mod grid;
 
 use super::StepStats;
-use super::constraint::{relative_normal_speed, two_bodies_mut};
 use crate::body::{Body, StaticBody};
 use crate::collision::CollisionSolver;
 use crate::geometry::Aabb;
@@ -10,8 +9,6 @@ use crate::world::{ActiveContact, BroadPhase, ContactBodyIndex, World};
 use alloc::vec::Vec;
 use i_key_sort::sort::two_keys_cmp::TwoKeysAndCmpSort;
 
-const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
-const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 const AUTO_BRUTE_FORCE_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy)]
@@ -217,41 +214,6 @@ fn sort_top_down(active_contacts: &mut [ActiveContact], buffer: &mut Vec<ActiveC
         |contact| contact.point.raw()[0],
         |a, b| a.body_a.cmp(&b.body_a),
     );
-}
-
-pub(super) fn wake_impacted_bodies(world: &mut World) {
-    for contact in world.active_contacts.iter().copied() {
-        let normal_speed = match contact.body_b {
-            ContactBodyIndex::Dynamic(index_b) => relative_normal_speed(
-                &world.bodies[contact.body_a],
-                Some(&world.bodies[index_b]),
-                contact.point,
-                contact.normal,
-            ),
-            ContactBodyIndex::Static(_) => relative_normal_speed(
-                &world.bodies[contact.body_a],
-                None,
-                contact.point,
-                contact.normal,
-            ),
-        };
-        let strong =
-            normal_speed < -WAKE_SPEED_RAW || contact.penetration.raw() > WAKE_PENETRATION_RAW;
-        if !strong {
-            continue;
-        }
-
-        match contact.body_b {
-            ContactBodyIndex::Dynamic(index_b) => {
-                let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-                a.state_mut().wake();
-                b.state_mut().wake();
-            }
-            ContactBodyIndex::Static(_) => {
-                world.bodies[contact.body_a].state_mut().wake();
-            }
-        }
-    }
 }
 
 #[cfg(test)]

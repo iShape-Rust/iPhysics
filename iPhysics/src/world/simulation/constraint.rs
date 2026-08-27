@@ -46,9 +46,9 @@ pub(super) fn relative_speed_along(
     point: GeometryPoint,
     axis: UnitVector,
 ) -> i32 {
-    let lever_a_q16 = contact_lever_cross_axis(a, point, axis);
+    let lever_a_q16 = a.contact_lever_cross_axis(point, axis);
     let lever_b_q16 = b
-        .map(|body| contact_lever_cross_axis(body, point, axis))
+        .map(|body| body.contact_lever_cross_axis(point, axis))
         .unwrap_or(0);
     relative_speed_along_levers(a, b, axis, lever_a_q16, lever_b_q16)
 }
@@ -82,31 +82,6 @@ pub(super) fn relative_speed_along_levers(
         -(MAX_RELATIVE_CONTACT_SPEED_RAW as i64),
         MAX_RELATIVE_CONTACT_SPEED_RAW as i64,
     ) as i32
-}
-
-#[inline(always)]
-pub(super) fn contact_lever_cross_axis(body: &Body, point: GeometryPoint, axis: UnitVector) -> i32 {
-    let center = GeometryPoint::from(body.state().transform().position);
-    let lever = point - center;
-    let cross = -axis.cross(lever);
-    cross as i32
-}
-
-#[inline(always)]
-pub(super) fn angular_contact_speed_raw(
-    body: &Body,
-    point: GeometryPoint,
-    axis: UnitVector,
-) -> i32 {
-    body.state()
-        .angular_velocity()
-        .projected_point_speed_raw(contact_lever_cross_axis(body, point, axis))
-}
-
-#[inline(always)]
-pub(super) fn point_speed_along(body: &Body, point: GeometryPoint, axis: UnitVector) -> i64 {
-    axis.dot(body.state().linear_velocity().raw().into())
-        + angular_contact_speed_raw(body, point, axis) as i64
 }
 
 #[inline(always)]

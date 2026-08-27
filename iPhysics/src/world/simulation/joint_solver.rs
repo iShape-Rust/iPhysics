@@ -1,12 +1,12 @@
 use super::constraint::{
-    apply_body_impulse, contact_lever_cross_axis, div_round_signed, point_speed_along,
+    apply_body_impulse, div_round_signed,
     round_shift_signed, scalar_inverse_mass_q24,
 };
-use crate::body::{Body, BodyId};
-use crate::joint::RopeJoint;
+use crate::body::BodyId;
 use crate::quantity::{Length, Position};
 use crate::world::World;
-use crate::{GeometryPoint, UnitVector};
+use crate::UnitVector;
+use crate::world::body::BodyIndex;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct DistanceImpulseState {
@@ -18,47 +18,6 @@ pub(super) struct DistanceImpulseState {
 pub(super) struct RopeImpulseState {
     /// Accumulated pulling-only scalar impulse in Q10 kg*m/s.
     accumulated_impulse_q10: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum EndpointIndex {
-    Dynamic(usize),
-    Static(usize),
-}
-
-pub(super) fn wake_connected_bodies(world: &mut World) {
-    // Propagate wake state through a whole joint island. Repeating to a fixed
-    // point avoids making the result depend on joint storage order.
-    loop {
-        let mut changed = false;
-        for index in 0..world.distance_joints.len() {
-            let joint = world.distance_joints[index];
-            changed |= wake_dynamic_pair(world, joint.body_a(), joint.body_b());
-        }
-        for index in 0..world.rope_joints.len() {
-            let joint = world.rope_joints[index];
-            if rope_is_taut(world, joint) {
-                changed |= wake_dynamic_pair(world, joint.body_a(), joint.body_b());
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-}
-
-pub(super) fn mark_sleep_constraints(world: &World, constrained: &mut [bool]) {
-    debug_assert_eq!(constrained.len(), world.bodies.len());
-    for joint in &world.distance_joints {
-        mark_dynamic_endpoint(world, constrained, joint.body_a());
-        mark_dynamic_endpoint(world, constrained, joint.body_b());
-    }
-    for joint in &world.rope_joints {
-        if rope_is_taut(world, *joint) {
-            mark_dynamic_endpoint(world, constrained, joint.body_a());
-            mark_dynamic_endpoint(world, constrained, joint.body_b());
-        }
-    }
 }
 
 pub(super) fn solve_distance_velocities(
@@ -144,14 +103,14 @@ fn solve_scalar_constraint(
     pulling_only: bool,
     accumulated_impulse_q10: &mut i64,
 ) {
-    let Some(endpoint_a) = resolve_endpoint(world, body_a) else {
+    let Some(endpoint_a) = world.resolve_endpoint(body_a) else {
         return;
     };
-    let Some(endpoint_b) = resolve_endpoint(world, body_b) else {
+    let Some(endpoint_b) = world.resolve_endpoint(body_b) else {
         return;
     };
-    let anchor_a = endpoint_anchor(world, endpoint_a, local_anchor_a);
-    let anchor_b = endpoint_anchor(world, endpoint_b, local_anchor_b);
+    let anchor_a = world.endpoint_anchor(endpoint_a, local_anchor_a);
+    let anchor_b = world.endpoint_anchor(endpoint_b, local_anchor_b);
     let delta = anchor_b - anchor_a;
     let current_length = delta.squared_magnitude().isqrt();
 
@@ -163,13 +122,13 @@ fn solve_scalar_constraint(
     // The deterministic fallback also defines how a zero-separation Distance
     // joint with a positive target length starts expanding.
     let axis = UnitVector::normalized_with_length(delta, current_length).unwrap_or(UnitVector::X);
-    let dynamic_a = endpoint_body(world, endpoint_a);
-    let dynamic_b = endpoint_body(world, endpoint_b);
+    let dynamic_a = world.endpoint_body(endpoint_a);
+    let dynamic_b = world.endpoint_body(endpoint_b);
     let lever_a = dynamic_a
-        .map(|body| contact_lever_cross_axis(body, anchor_a, axis))
+        .map(|body| body.contact_lever_cross_axis(anchor_a, axis))
         .unwrap_or(0);
     let lever_b = dynamic_b
-        .map(|body| contact_lever_cross_axis(body, anchor_b, axis))
+        .map(|body| body.contact_lever_cross_axis(anchor_b, axis))
         .unwrap_or(0);
     let inverse_mass = scalar_inverse_mass_q24(dynamic_a, dynamic_b, lever_a, lever_b);
     if inverse_mass == 0 {
@@ -180,8 +139,8 @@ fn solve_scalar_constraint(
     // so the desired B-relative-to-A speed and resulting impulse are negative.
     let error_q16 = current_length as i64 - target_length.raw() as i64;
     let desired_speed_q10 = -round_shift_signed(error_q16 * response_q16 as i64, 16);
-    let relative_speed_q10 = endpoint_speed(world, endpoint_b, anchor_b, axis)
-        - endpoint_speed(world, endpoint_a, anchor_a, axis);
+    let relative_speed_q10 = world.endpoint_speed(endpoint_b, anchor_b, axis)
+        - world.endpoint_speed(endpoint_a, anchor_a, axis);
     let velocity_change_q10 = desired_speed_q10.saturating_sub(relative_speed_q10);
     let impulse_change_q10 =
         div_round_signed((velocity_change_q10 as i128) << 24, inverse_mass as u128);
@@ -200,99 +159,17 @@ fn solve_scalar_constraint(
     if applied == 0 {
         return;
     }
-    if let EndpointIndex::Dynamic(index) = endpoint_a {
+    if let BodyIndex::Dynamic(index) = endpoint_a {
         apply_body_impulse(&mut world.bodies[index], axis, -applied, lever_a);
     }
-    if let EndpointIndex::Dynamic(index) = endpoint_b {
+    if let BodyIndex::Dynamic(index) = endpoint_b {
         apply_body_impulse(&mut world.bodies[index], axis, applied, lever_b);
-    }
-}
-
-#[inline]
-fn resolve_endpoint(world: &World, id: BodyId) -> Option<EndpointIndex> {
-    if let Ok(index) = world.bodies.binary_search_by_key(&id, Body::id) {
-        Some(EndpointIndex::Dynamic(index))
-    } else {
-        world
-            .static_bodies
-            .binary_search_by_key(&id, |body| body.id())
-            .ok()
-            .map(EndpointIndex::Static)
-    }
-}
-
-#[inline(always)]
-fn endpoint_body(world: &World, endpoint: EndpointIndex) -> Option<&Body> {
-    match endpoint {
-        EndpointIndex::Dynamic(index) => Some(&world.bodies[index]),
-        EndpointIndex::Static(_) => None,
-    }
-}
-
-#[inline(always)]
-fn endpoint_anchor(world: &World, endpoint: EndpointIndex, local: Position) -> GeometryPoint {
-    match endpoint {
-        EndpointIndex::Dynamic(index) => world.bodies[index]
-            .state()
-            .transform()
-            .apply_geometry(local),
-        EndpointIndex::Static(index) => {
-            world.static_bodies[index].transform().apply_geometry(local)
-        }
-    }
-}
-
-#[inline(always)]
-fn endpoint_speed(
-    world: &World,
-    endpoint: EndpointIndex,
-    anchor: GeometryPoint,
-    axis: UnitVector,
-) -> i64 {
-    match endpoint {
-        EndpointIndex::Dynamic(index) => point_speed_along(&world.bodies[index], anchor, axis),
-        EndpointIndex::Static(_) => 0,
-    }
-}
-
-fn wake_dynamic_pair(world: &mut World, body_a: BodyId, body_b: BodyId) -> bool {
-    let Ok(index_a) = world.bodies.binary_search_by_key(&body_a, Body::id) else {
-        return false;
-    };
-    let Ok(index_b) = world.bodies.binary_search_by_key(&body_b, Body::id) else {
-        return false;
-    };
-    let sleeping_a = world.bodies[index_a].state().is_sleeping();
-    let sleeping_b = world.bodies[index_b].state().is_sleeping();
-    if sleeping_a == sleeping_b {
-        return false;
-    }
-    let sleeping_index = if sleeping_a { index_a } else { index_b };
-    world.bodies[sleeping_index].state_mut().wake();
-    true
-}
-
-fn rope_is_taut(world: &World, joint: RopeJoint) -> bool {
-    let Some(endpoint_a) = resolve_endpoint(world, joint.body_a()) else {
-        return false;
-    };
-    let Some(endpoint_b) = resolve_endpoint(world, joint.body_b()) else {
-        return false;
-    };
-    let anchor_a = endpoint_anchor(world, endpoint_a, joint.local_anchor_a());
-    let anchor_b = endpoint_anchor(world, endpoint_b, joint.local_anchor_b());
-
-    (anchor_b - anchor_a).squared_magnitude() >= joint.max_length().sqr_length()
-}
-
-fn mark_dynamic_endpoint(world: &World, constrained: &mut [bool], id: BodyId) {
-    if let Ok(index) = world.bodies.binary_search_by_key(&id, Body::id) {
-        constrained[index] = true;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::Body;
     use super::*;
     use crate::body::{BodyState, Material, SleepConfig, StaticBody};
     use crate::collider::Circle;

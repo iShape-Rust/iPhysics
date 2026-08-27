@@ -1,6 +1,6 @@
 use super::constraint::{
     MAX_RELATIVE_CONTACT_SPEED_RAW, add_angular_velocity, add_position, add_velocity,
-    contact_inverse_mass_q24, contact_lever_cross_axis, point_speed_along,
+    contact_inverse_mass_q24,
     relative_speed_along_levers, round_shift_signed, two_bodies_mut,
 };
 use crate::body::Body;
@@ -101,9 +101,9 @@ fn prepare_axis_constraint(
     contact: &ActiveContact,
     axis: UnitVector,
 ) -> AxisConstraint {
-    let lever_a_q16 = contact_lever_cross_axis(a, contact.point, axis);
+    let lever_a_q16 = a.contact_lever_cross_axis(contact.point, axis);
     let lever_b_q16 = b
-        .map(|body| contact_lever_cross_axis(body, contact.point, axis))
+        .map(|body| body.contact_lever_cross_axis(contact.point, axis))
         .unwrap_or(0);
     let inverse_sum_q24 = contact_inverse_mass_q24(a, b, lever_a_q16, lever_b_q16);
     if inverse_sum_q24 == 0 {
@@ -206,9 +206,9 @@ fn has_inward_contact_velocity(world: &World, constraints: &[ContactConstraint])
             ContactBodyIndex::Dynamic(index_b) => Some(&world.bodies[index_b]),
             ContactBodyIndex::Static(_) => None,
         };
-        let speed_a = point_speed_along(a, contact.point, contact.normal);
+        let speed_a = a.point_speed_along(contact.point, contact.normal);
         let speed_b = b
-            .map(|body| point_speed_along(body, contact.point, contact.normal))
+            .map(|body| body.point_speed_along(contact.point, contact.normal))
             .unwrap_or(0);
         let a_is_blocked = speed_a > speed_b.max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
         let b_is_blocked =
@@ -611,12 +611,12 @@ fn project_body_velocity_pair(
     // its speed is not a valid moving boundary and the limit becomes zero.
     let speed_b = b
         .as_deref()
-        .map(|body| point_speed_along(body, contact.point, contact.normal))
+        .map(|body| body.point_speed_along(contact.point, contact.normal))
         .unwrap_or(0);
     let tangent_a = contact.normal.perpendicular();
     let tangent_speed_b = b
         .as_deref()
-        .map(|body| point_speed_along(body, contact.point, tangent_a))
+        .map(|body| body.point_speed_along(contact.point, tangent_a))
         .unwrap_or(0);
     project_single_body_velocity(
         a,
@@ -630,10 +630,10 @@ fn project_body_velocity_pair(
     // Apply the same rule from B's point of view. Re-read A after its
     // projection so the second limit describes the current contact motion.
     if let Some(body_b) = b.as_deref_mut() {
-        let speed_a = point_speed_along(a, contact.point, contact.normal);
+        let speed_a = a.point_speed_along(contact.point, contact.normal);
         let normal_b = -contact.normal;
         let tangent_b = normal_b.perpendicular();
-        let tangent_speed_a = point_speed_along(a, contact.point, tangent_b);
+        let tangent_speed_a = a.point_speed_along(contact.point, tangent_b);
         project_single_body_velocity(
             body_b,
             contact,
@@ -653,12 +653,12 @@ fn project_single_body_velocity(
     contact_tangent_speed: i64,
     friction_q16: u32,
 ) {
-    let body_speed = point_speed_along(body, contact.point, axis);
+    let body_speed = body.point_speed_along(contact.point, axis);
     let excess = body_speed.saturating_sub(contact_speed_limit);
     if excess <= 0 {
         return;
     }
-    let lever_q16 = contact_lever_cross_axis(body, contact.point, axis);
+    let lever_q16 = body.contact_lever_cross_axis(contact.point, axis);
     let inverse_sum_q24 = contact_inverse_mass_q24(body, None, lever_q16, 0);
     if inverse_sum_q24 == 0 {
         return;
@@ -682,12 +682,12 @@ fn project_single_body_velocity(
         return;
     }
     let tangent = axis.perpendicular();
-    let tangent_lever_q16 = contact_lever_cross_axis(body, contact.point, tangent);
+    let tangent_lever_q16 = body.contact_lever_cross_axis(contact.point, tangent);
     let tangent_inverse_sum_q24 = contact_inverse_mass_q24(body, None, tangent_lever_q16, 0);
     if tangent_inverse_sum_q24 == 0 {
         return;
     }
-    let tangent_speed = point_speed_along(body, contact.point, tangent);
+    let tangent_speed = body.point_speed_along(contact.point, tangent);
     let desired_tangent_change = tangent_speed.saturating_sub(contact_tangent_speed);
     let friction_response =
         friction_response_q31(friction_q16, inverse_sum_q24, tangent_inverse_sum_q24);
