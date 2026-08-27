@@ -25,6 +25,6 @@ pub use quantity::{
 };
 pub use transform::Transform;
 pub use world::{
-    AddBodyError, AddJointError, AddMouseJointError, BroadPhase, Contacts, GridBroadPhase,
+    AddBodyError, AddJointError, AddMouseJointError, BodyRef, BroadPhase, Contacts, GridBroadPhase,
     StepStats, World, WorldSettings,
 };

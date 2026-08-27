@@ -1,5 +1,5 @@
 use crate::world::ContactBodyIndex;
-use crate::world::simulation::constraint::{relative_normal_speed, two_bodies_mut};
+use crate::world::simulation::constraint::{relative_speed_along, two_bodies_mut};
 use crate::{Body, BodyId, RopeJoint, StepStats, World};
 use alloc::vec;
 
@@ -39,13 +39,13 @@ impl World {
     pub(crate) fn wake_impacted_bodies(&mut self) {
         for contact in self.active_contacts.iter().copied() {
             let normal_speed = match contact.body_b {
-                ContactBodyIndex::Dynamic(index_b) => relative_normal_speed(
+                ContactBodyIndex::Dynamic(index_b) => relative_speed_along(
                     &self.bodies[contact.body_a],
                     Some(&self.bodies[index_b]),
                     contact.point,
                     contact.normal,
                 ),
-                ContactBodyIndex::Static(_) => relative_normal_speed(
+                ContactBodyIndex::Static(_) => relative_speed_along(
                     &self.bodies[contact.body_a],
                     None,
                     contact.point,

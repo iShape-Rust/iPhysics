@@ -16,11 +16,6 @@ impl BodyId {
     pub const fn raw(self) -> u64 {
         self.0
     }
-
-    #[inline(always)]
-    pub const fn from_raw(raw: u64) -> Self {
-        Self(raw)
-    }
 }
 
 #[cfg(test)]
@@ -33,6 +28,6 @@ mod tests {
 
         assert_eq!(core::mem::size_of::<BodyId>(), 8);
         assert_eq!(id.raw(), 0x1234_5678_9abc);
-        assert_eq!(BodyId::from_raw(id.raw()), id);
+        assert_eq!(BodyId::new(id.raw()), id);
     }
 }

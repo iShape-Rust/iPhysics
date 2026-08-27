@@ -101,16 +101,22 @@ with deterministic, non-expanding integer Q30 CORDIC.
 Interpreting an angle subtraction as `i32` directly produces the shortest
 wrapped difference.
 
-**[`AngularVelocity`](iPhysics/src/quantity/angular_velocity.rs)** and
+**[`AngularVelocity`](iPhysics/src/quantity/angular_velocity.rs)** — one `i32`
+in Q16.
+
+- Resolution: `2^-16 rad/s`, approximately `0.0000152588 rad/s`.
+- Raw range: `-2^23..=2^23 - 1`.
+- Physical range: `-128 rad/s` inclusive to `128 rad/s` exclusive.
+
 **[`AngularAcceleration`](iPhysics/src/quantity/angular_acceleration.rs)** —
-one `i32` in Q24 each.
+one `i32` in Q24.
 
-- Resolution: `2^-24 rad/s` or `2^-24 rad/s²`, approximately `5.96046e-8` in
-  the corresponding unit.
-- Range: `-128` inclusive to `128` exclusive in the corresponding unit.
+- Resolution: `2^-24 rad/s²`, approximately `5.96046e-8 rad/s²`.
+- Raw range: the full `i32` range.
+- Physical range: `-128 rad/s²` inclusive to `128 rad/s²` exclusive.
 
-Both use the full underlying `i32` range. Conversion and integration use
-`i64` intermediates.
+Conversion and integration use `i64` intermediates. Angular velocity
+saturates at its bounded Q16 range.
 
 ### Mass and material
 
@@ -187,9 +193,10 @@ Consequently, the smallest stored values remain observable across quantities:
   tick.
 - One Q10 velocity unit (`0.0009765625 m/s`) produces one Q16 position unit
   per tick.
-- Angular acceleration to angular velocity: `2^-19 rad/s²`, or
-  `0.00000190735 rad/s²`.
-- One Q24 angular-velocity unit already rounds to a non-zero binary-angle
+- Because angular acceleration Q24 is converted to angular velocity Q16 at
+  `64 Hz`, the smallest acceleration that rounds to a non-zero velocity change
+  per tick is `2^-11 rad/s²`, or `0.00048828125 rad/s²`.
+- One Q16 angular-velocity unit already rounds to a non-zero binary-angle
   step.
 
 Every non-zero stored linear velocity moves the body. Small debris still
@@ -218,7 +225,7 @@ impulse to `max_force / 64` on every tick.
 ```rust
 let body_id = BodyId::new(1);
 let pointer = Position::from_meters(2.0, 3.0).unwrap();
-let transform = world.body(body_id).unwrap().state().transform();
+let transform = world.body_by_id(body_id).unwrap().transform();
 let joint = MouseJoint::at_world_point(
     body_id,
     transform,

@@ -79,11 +79,7 @@ mod rope;
 #[inline]
 pub(super) fn length_between(a: Position, b: Position) -> Option<Length> {
     let raw = (b - a).squared_magnitude().isqrt();
-    if raw > Length::MAX_LENGTH as u64 {
-        None
-    } else {
-        Some(Length::from_raw(raw as u32))
-    }
+    Length::from_raw(u32::try_from(raw).ok()?)
 }
 
 pub(super) fn inverse_transform_point(transform: Transform, world: Position) -> Position {

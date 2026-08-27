@@ -278,10 +278,10 @@ impl PhysicsDebugApp {
 
         ui.separator();
         ui.monospace(format!("tick              {}", self.tick));
-        ui.monospace(format!("dynamic bodies    {}", self.world.body_count()));
+        ui.monospace(format!("dynamic bodies    {}", self.world.bodies().len()));
         ui.monospace(format!(
             "static bodies     {}",
-            self.world.static_body_count()
+            self.world.static_bodies().len()
         ));
         ui.monospace(format!("tested pairs      {}", self.stats.tested_pairs));
         ui.monospace(format!("AABB pairs        {}", self.stats.aabb_pairs));
@@ -948,10 +948,7 @@ fn joint_screen_anchors(
 }
 
 fn endpoint_transform(world: &World, id: BodyId) -> Option<Transform> {
-    world
-        .body(id)
-        .map(|body| body.state().transform())
-        .or_else(|| world.static_body(id).map(StaticBody::transform))
+    world.body_by_id(id).map(|body| body.transform())
 }
 
 fn paint_joint_anchors(painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32) {
@@ -1413,10 +1410,10 @@ fn distance_dynamic_pair_world() -> World {
     let anchor_b = Position::from_meters(1.8, 0.45).unwrap();
     let joint = DistanceJoint::between_world_points(
         BodyId::new(1),
-        world.body(BodyId::new(1)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(1)).unwrap().transform(),
         anchor_a,
         BodyId::new(2),
-        world.body(BodyId::new(2)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(2)).unwrap().transform(),
         anchor_b,
         joint_force(),
     )
@@ -1448,10 +1445,10 @@ fn distance_static_harpoon_world() -> World {
     let body_anchor = Position::from_meters(0.25, 1.5).unwrap();
     let joint = DistanceJoint::between_world_points(
         BodyId::new(1),
-        world.static_body(BodyId::new(1)).unwrap().transform(),
+        world.body_by_id(BodyId::new(1)).unwrap().transform(),
         wall_anchor,
         BodyId::new(2),
-        world.body(BodyId::new(2)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(2)).unwrap().transform(),
         body_anchor,
         joint_force(),
     )
@@ -1472,10 +1469,10 @@ fn rope_dynamic_pair_world() -> World {
     add(&mut world, dynamic(2, 1.5, 1.0, 0.65, 2.0, -0.35, material));
     let joint = RopeJoint::at_world_points(
         BodyId::new(1),
-        world.body(BodyId::new(1)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(1)).unwrap().transform(),
         Position::from_meters(-1.5, 1.0).unwrap(),
         BodyId::new(2),
-        world.body(BodyId::new(2)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(2)).unwrap().transform(),
         Position::from_meters(1.5, 1.0).unwrap(),
         Length::from_meters(4.5).unwrap(),
         joint_force(),
@@ -1505,10 +1502,10 @@ fn rope_static_harpoon_world() -> World {
 
     let joint = RopeJoint::at_world_points(
         BodyId::new(1),
-        world.static_body(BodyId::new(1)).unwrap().transform(),
+        world.body_by_id(BodyId::new(1)).unwrap().transform(),
         Position::from_meters(4.25, 2.2).unwrap(),
         BodyId::new(2),
-        world.body(BodyId::new(2)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(2)).unwrap().transform(),
         Position::from_meters(0.55, 0.8).unwrap(),
         Length::from_meters(4.6).unwrap(),
         joint_force(),
@@ -1538,10 +1535,10 @@ fn rope_gravity_harpoon_world() -> World {
 
     let joint = RopeJoint::at_world_points(
         BodyId::new(1),
-        world.static_body(BodyId::new(1)).unwrap().transform(),
+        world.body_by_id(BodyId::new(1)).unwrap().transform(),
         Position::from_meters(4.25, 4.2).unwrap(),
         BodyId::new(2),
-        world.body(BodyId::new(2)).unwrap().state().transform(),
+        world.body_by_id(BodyId::new(2)).unwrap().transform(),
         Position::from_meters(1.2, 3.7).unwrap(),
         Length::from_meters(4.2).unwrap(),
         joint_force(),
@@ -1880,7 +1877,7 @@ mod tests {
             let world = build_world(scenario);
             assert_eq!(world.distance_joints().len(), distance_count);
             assert_eq!(world.rope_joints().len(), rope_count);
-            assert_eq!(world.static_body_count(), static_count);
+            assert_eq!(world.static_bodies().len(), static_count);
             for joint in world.distance_joints() {
                 assert!(endpoint_transform(&world, joint.body_a()).is_some());
                 assert!(endpoint_transform(&world, joint.body_b()).is_some());
@@ -2027,8 +2024,8 @@ mod tests {
 
         let world = build_world(Scenario::DominoPyramid);
         let material = Material::new(0.0, 0.8).unwrap();
-        assert_eq!(world.static_body_count(), 1);
-        assert_eq!(world.body_count(), BASE_COUNT * (BASE_COUNT + 2));
+        assert_eq!(world.static_bodies().len(), 1);
+        assert_eq!(world.bodies().len(), BASE_COUNT * (BASE_COUNT + 2));
         assert_eq!(world.static_bodies()[0].material(), material);
         assert!(
             world
@@ -2062,8 +2059,8 @@ mod tests {
 
     fn assert_pyramid_layout(world: &World) {
         let material = Material::new(0.0, 0.8).unwrap();
-        assert_eq!(world.static_body_count(), 1);
-        assert_eq!(world.body_count(), 7 + 6 + 5 + 4 + 3 + 2 + 1);
+        assert_eq!(world.static_bodies().len(), 1);
+        assert_eq!(world.bodies().len(), 7 + 6 + 5 + 4 + 3 + 2 + 1);
         assert_eq!(world.static_bodies()[0].material(), material);
         assert!(
             world

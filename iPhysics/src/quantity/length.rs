@@ -10,30 +10,34 @@ use super::{POSITION_FRACTION_BITS, Position};
 pub struct Length(u32);
 
 impl Length {
-    pub(crate) const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
-    pub(crate) const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
-    #[cfg(test)]
-    pub(crate) const ZERO: Self = Self(0);
+    /// Number of fractional bits in the raw Q16 representation.
+    pub const FRACTION_BITS: u32 = POSITION_FRACTION_BITS;
+    /// Raw units per metre.
+    pub const SCALE: u64 = 1_u64 << Self::FRACTION_BITS;
+    /// Zero length.
+    pub const ZERO: Self = Self(0);
     pub(crate) const MAX_LENGTH: u32 = Position::MAX_POINT as u32;
 
+    /// Creates a length from raw Q16 units.
+    ///
+    /// Returns `None` when the value exceeds the simulation length range.
     #[inline(always)]
-    pub(crate) const fn from_raw(raw: u32) -> Self {
-        debug_assert!(raw <= Self::MAX_LENGTH);
-        Self(raw)
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        if raw <= Self::MAX_LENGTH {
+            Some(Self(raw))
+        } else {
+            None
+        }
     }
 
     #[inline]
     pub fn from_meters(value: f64) -> Option<Self> {
-        let quant: u32 = value.quantize(Self::FRACTION_BITS)?;
-        if quant > Self::MAX_LENGTH {
-            None
-        } else {
-            Some(Self(quant))
-        }
+        Self::from_raw(value.quantize(Self::FRACTION_BITS)?)
     }
 
+    /// Returns the raw Q16 length.
     #[inline(always)]
-    pub(crate) const fn raw(self) -> u32 {
+    pub const fn raw(self) -> u32 {
         self.0
     }
 
@@ -46,5 +50,18 @@ impl Length {
     pub fn sqr_length(self) -> u64 {
         let l = self.0 as u64;
         l * l
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_constructor_enforces_the_length_range() {
+        let max = Length::from_raw(Length::MAX_LENGTH).unwrap();
+
+        assert_eq!(max.raw(), Length::MAX_LENGTH);
+        assert!(Length::from_raw(Length::MAX_LENGTH + 1).is_none());
     }
 }

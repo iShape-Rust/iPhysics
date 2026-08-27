@@ -100,24 +100,34 @@ mod tests {
     #[test]
     fn radius_respects_world_limit() {
         assert!(Circle::new(Length::ZERO).is_none());
-        assert!(Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).is_some());
-        assert!(Circle::new(Length::from_raw(Position::MAX_POSITION as u32 + 1)).is_none());
+        assert!(Circle::new(Length::from_raw(Position::MAX_POSITION as u32).unwrap()).is_some());
+        assert!(
+            Circle::new(Length::from_raw(Position::MAX_POSITION as u32 + 1).unwrap()).is_none()
+        );
     }
 
     #[test]
     fn offset_circle_respects_combined_radius_limit() {
         let max = Position::MAX_POSITION;
         assert!(
-            Circle::with_center(Position::from_i32(max - 10, 0), Length::from_raw(10)).is_some()
+            Circle::with_center(
+                Position::from_i32(max - 10, 0),
+                Length::from_raw(10).unwrap()
+            )
+            .is_some()
         );
         assert!(
-            Circle::with_center(Position::from_i32(max - 10, 0), Length::from_raw(11)).is_none()
+            Circle::with_center(
+                Position::from_i32(max - 10, 0),
+                Length::from_raw(11).unwrap()
+            )
+            .is_none()
         );
     }
 
     #[test]
     fn aabb_can_extend_beyond_position_range() {
-        let circle = Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).unwrap();
+        let circle = Circle::new(Length::from_raw(Position::MAX_POSITION as u32).unwrap()).unwrap();
         let center = Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION);
         let aabb = circle.aabb(Transform::new(center, crate::quantity::Angle::ZERO));
 

@@ -69,7 +69,7 @@ fn collide_at(
         body_b,
         point: center_a.offset(normal, contact_offset),
         normal,
-        penetration: Length::from_raw(penetration_raw),
+        penetration: Length::from_raw(penetration_raw).expect("circle penetration must fit Length"),
         key: ContactKey::new(ColliderFeature::Circle, ColliderFeature::Circle),
     })
 }
@@ -131,8 +131,8 @@ mod tests {
 
     #[test]
     fn contact_point_can_extend_beyond_position_range() {
-        let large = Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).unwrap();
-        let small = Circle::new(Length::from_raw(1)).unwrap();
+        let large = Circle::new(Length::from_raw(Position::MAX_POSITION as u32).unwrap()).unwrap();
+        let small = Circle::new(Length::from_raw(1).unwrap()).unwrap();
         let center = Position::from_i32(Position::MAX_POSITION, Position::MAX_POSITION);
         let contact =
             collide(BodyId::new(1), large, center, BodyId::new(2), small, center).unwrap();
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn maximum_penetration_fits_length() {
-        let circle = Circle::new(Length::from_raw(Position::MAX_POSITION as u32)).unwrap();
+        let circle = Circle::new(Length::from_raw(Position::MAX_POSITION as u32).unwrap()).unwrap();
         let contact = collide(
             BodyId::new(1),
             circle,

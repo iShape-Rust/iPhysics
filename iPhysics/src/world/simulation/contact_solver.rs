@@ -1,5 +1,5 @@
 use super::constraint::{
-    MAX_RELATIVE_CONTACT_SPEED_RAW, contact_inverse_mass_q24, relative_speed_along_levers,
+    MAX_RELATIVE_CONTACT_SPEED_RAW, relative_speed_along_levers, scalar_inverse_mass_q24,
     two_bodies_mut,
 };
 use crate::body::Body;
@@ -105,7 +105,7 @@ fn prepare_axis_constraint(
     let lever_b_q16 = b
         .map(|body| body.contact_lever_cross_axis(contact.point, axis))
         .unwrap_or(0);
-    let inverse_sum_q24 = contact_inverse_mass_q24(a, b, lever_a_q16, lever_b_q16);
+    let inverse_sum_q24 = scalar_inverse_mass_q24(Some(a), b, lever_a_q16, lever_b_q16);
     if inverse_sum_q24 == 0 {
         return AxisConstraint {
             lever_a_q16,
@@ -658,7 +658,7 @@ fn project_single_body_velocity(
         return;
     }
     let lever_q16 = body.contact_lever_cross_axis(contact.point, axis);
-    let inverse_sum_q24 = contact_inverse_mass_q24(body, None, lever_q16, 0);
+    let inverse_sum_q24 = scalar_inverse_mass_q24(Some(body), None, lever_q16, 0);
     if inverse_sum_q24 == 0 {
         return;
     }
@@ -682,7 +682,7 @@ fn project_single_body_velocity(
     }
     let tangent = axis.perpendicular();
     let tangent_lever_q16 = body.contact_lever_cross_axis(contact.point, tangent);
-    let tangent_inverse_sum_q24 = contact_inverse_mass_q24(body, None, tangent_lever_q16, 0);
+    let tangent_inverse_sum_q24 = scalar_inverse_mass_q24(Some(body), None, tangent_lever_q16, 0);
     if tangent_inverse_sum_q24 == 0 {
         return;
     }
@@ -966,7 +966,7 @@ fn div_round(numerator: u64, denominator: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::constraint::{relative_normal_speed, relative_speed_along};
+    use super::super::constraint::relative_speed_along;
     use super::*;
     use crate::body::{BodyId, BodyState, Material, StaticBody};
     use crate::collider::{Circle, Convex};
@@ -1040,7 +1040,7 @@ mod tests {
         let normal = UnitVector::from_raw(1 << 30, 1 << 30);
 
         assert_eq!(
-            relative_normal_speed(&a, Some(&b), point, normal),
+            relative_speed_along(&a, Some(&b), point, normal),
             MAX_RELATIVE_CONTACT_SPEED_RAW
         );
     }
@@ -1219,7 +1219,7 @@ mod tests {
         assert_eq!(b.state().linear_velocity().raw(), [-341, 0]);
         assert!(a.state().angular_velocity().raw() > 0);
         assert!(b.state().angular_velocity().raw() < 0);
-        assert!(relative_normal_speed(a, Some(b), contact.point, contact.normal).abs() <= 1);
+        assert!(relative_speed_along(a, Some(b), contact.point, contact.normal).abs() <= 1);
     }
 
     #[test]
@@ -1244,7 +1244,7 @@ mod tests {
 
         let a = &world.bodies[0];
         let b = &world.bodies[1];
-        assert!(relative_normal_speed(a, Some(b), contact.point, contact.normal) >= 0);
+        assert!(relative_speed_along(a, Some(b), contact.point, contact.normal) >= 0);
         assert!(!a.state().deferred_contact_linear().is_zero());
         assert!(!b.state().deferred_contact_linear().is_zero());
         assert_eq!(constraints[0].normal_velocity_change_q10, 0);

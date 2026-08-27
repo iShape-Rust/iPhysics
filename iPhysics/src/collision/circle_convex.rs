@@ -148,7 +148,8 @@ fn build_contact(
         body_b: convex_body,
         point: circle_center.offset(normal, contact_offset),
         normal,
-        penetration: Length::from_raw(penetration),
+        penetration: Length::from_raw(penetration)
+            .expect("circle-convex penetration must fit Length"),
         key: ContactKey::new(ColliderFeature::Circle, convex_feature),
     }
 }

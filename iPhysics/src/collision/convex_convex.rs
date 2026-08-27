@@ -130,7 +130,7 @@ pub(super) fn collide_with_scratch(
             body_b,
             point: candidate.point,
             normal,
-            penetration: Length::from_raw(penetration),
+            penetration: Length::from_raw(penetration).expect("convex penetration must fit Length"),
             key: ContactKey::new(feature_a, feature_b),
         }
     };

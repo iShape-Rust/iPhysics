@@ -134,7 +134,7 @@ mod tests {
     use alloc::vec;
 
     fn circle() -> SimpleCollider {
-        Circle::new(Length::from_raw(1)).unwrap().into()
+        Circle::new(Length::from_raw(1).unwrap()).unwrap().into()
     }
 
     #[test]
