@@ -1,17 +1,17 @@
-use super::constraint::contact_inverse_mass_q24;
+use super::super::constraint::scalar_inverse_mass_q24;
 use crate::body::Body;
 use crate::ops::{div::DivRoundSigned, shift::RoundShift};
 use crate::world::World;
 use crate::{GeometryPoint, UnitVector};
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct MouseImpulseState {
+pub(in crate::world::simulation) struct MouseImpulseState {
     /// Accumulated world-space impulse in Q10 kg*m/s.
     impulse_q10: [i64; 2],
 }
 
 impl World {
-    pub(super) fn solve_mouse_joints_velocities(
+    pub(in crate::world::simulation) fn solve_mouse_joints_velocities(
         &mut self,
         impulse_states: &mut [MouseImpulseState],
         reverse: bool,
@@ -68,8 +68,8 @@ impl Body {
         let y_axis = x_axis.perpendicular();
         let lever_x = self.contact_lever_cross_axis(anchor, x_axis);
         let lever_y = self.contact_lever_cross_axis(anchor, y_axis);
-        let inverse_xx = contact_inverse_mass_q24(self, None, lever_x, 0);
-        let inverse_yy = contact_inverse_mass_q24(self, None, lever_y, 0);
+        let inverse_xx = scalar_inverse_mass_q24(Some(self), None, lever_x, 0);
+        let inverse_yy = scalar_inverse_mass_q24(Some(self), None, lever_y, 0);
         let inverse_xy =
             rotational_inverse_mass_cross_q24(lever_x, lever_y, self.inverse_inertia_q40());
         let determinant = (inverse_xx as u128 * inverse_yy as u128)

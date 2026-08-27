@@ -6,83 +6,15 @@ use crate::quantity::{Length, Position};
 use crate::world::World;
 use crate::world::body::BodyIndex;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DistanceImpulseState {
-    /// Accumulated bilateral scalar impulse in Q10 kg*m/s.
-    accumulated_impulse_q10: i64,
-}
+mod distance;
+mod mouse;
+mod rope;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct RopeImpulseState {
-    /// Accumulated pulling-only scalar impulse in Q10 kg*m/s.
-    accumulated_impulse_q10: i64,
-}
+pub(super) use distance::DistanceImpulseState;
+pub(super) use mouse::MouseImpulseState;
+pub(super) use rope::RopeImpulseState;
 
 impl World {
-    pub(super) fn solve_distance_joints_velocities(
-        &mut self,
-        states: &mut [DistanceImpulseState],
-        reverse: bool,
-    ) {
-        debug_assert_eq!(states.len(), self.distance_joints.len());
-        if reverse {
-            for index in (0..self.distance_joints.len()).rev() {
-                self.solve_distance_velocity(index, &mut states[index]);
-            }
-        } else {
-            for (index, state) in states.iter_mut().enumerate() {
-                self.solve_distance_velocity(index, state);
-            }
-        }
-    }
-
-    fn solve_distance_velocity(&mut self, joint_index: usize, state: &mut DistanceImpulseState) {
-        let joint = self.distance_joints[joint_index];
-        self.solve_scalar_constraint(
-            joint.body_a(),
-            joint.local_anchor_a(),
-            joint.body_b(),
-            joint.local_anchor_b(),
-            joint.length(),
-            joint.max_force().impulse_per_tick_q10(),
-            joint.response_raw(),
-            false,
-            &mut state.accumulated_impulse_q10,
-        );
-    }
-
-    pub(super) fn solve_rope_joints_velocities(
-        &mut self,
-        states: &mut [RopeImpulseState],
-        reverse: bool,
-    ) {
-        debug_assert_eq!(states.len(), self.rope_joints.len());
-        if reverse {
-            for index in (0..self.rope_joints.len()).rev() {
-                self.solve_rope_velocity(index, &mut states[index]);
-            }
-        } else {
-            for (index, state) in states.iter_mut().enumerate() {
-                self.solve_rope_velocity(index, state);
-            }
-        }
-    }
-
-    fn solve_rope_velocity(&mut self, joint_index: usize, state: &mut RopeImpulseState) {
-        let joint = self.rope_joints[joint_index];
-        self.solve_scalar_constraint(
-            joint.body_a(),
-            joint.local_anchor_a(),
-            joint.body_b(),
-            joint.local_anchor_b(),
-            joint.max_length(),
-            joint.max_force().impulse_per_tick_q10(),
-            joint.response_raw(),
-            true,
-            &mut state.accumulated_impulse_q10,
-        );
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn solve_scalar_constraint(
         &mut self,

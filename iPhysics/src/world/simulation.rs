@@ -2,7 +2,6 @@ pub(crate) mod constraint;
 mod contact_detection;
 mod contact_solver;
 mod joint_solver;
-mod mouse_solver;
 mod sleep;
 
 pub(in crate::world) use contact_detection::BroadPhaseScratch;
@@ -31,7 +30,7 @@ impl World {
         let mut contact_constraints = contact_solver::prepare_constraints(self);
         self.prepare_warm_start(&mut contact_constraints);
         let mut mouse_states =
-            vec![mouse_solver::MouseImpulseState::default(); self.mouse_joints.len()];
+            vec![joint_solver::MouseImpulseState::default(); self.mouse_joints.len()];
         let mut distance_states =
             vec![joint_solver::DistanceImpulseState::default(); self.distance_joints.len()];
         let mut rope_states =
