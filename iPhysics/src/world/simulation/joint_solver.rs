@@ -281,7 +281,8 @@ fn rope_is_taut(world: &World, joint: RopeJoint) -> bool {
     };
     let anchor_a = endpoint_anchor(world, endpoint_a, joint.local_anchor_a());
     let anchor_b = endpoint_anchor(world, endpoint_b, joint.local_anchor_b());
-    (anchor_b - anchor_a).squared_magnitude().isqrt() >= joint.max_length().raw() as u64
+
+    (anchor_b - anchor_a).squared_magnitude() >= joint.max_length().sqr_length()
 }
 
 fn mark_dynamic_endpoint(world: &World, constrained: &mut [bool], id: BodyId) {
