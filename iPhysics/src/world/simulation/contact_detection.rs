@@ -256,11 +256,13 @@ mod tests {
         )
     }
 
-    fn contacts_with(world: &World, broad_phase: BroadPhase) -> (Vec<ActiveContact>, StepStats) {
-        let mut world = world.clone();
-        world.settings.broad_phase = broad_phase;
-        let stats = world.build_contacts();
-        (world.active_contacts, stats)
+    impl World {
+        fn contacts_with(&self, broad_phase: BroadPhase) -> (Vec<ActiveContact>, StepStats) {
+            let mut world = self.clone();
+            world.settings.broad_phase = broad_phase;
+            let stats = world.build_contacts();
+            (world.active_contacts, stats)
+        }
     }
 
     #[test]
@@ -317,8 +319,8 @@ mod tests {
             .add_static_body(static_circle(101, 9.0, -1.0, 1.25))
             .unwrap();
 
-        let brute = contacts_with(&world, BroadPhase::BruteForce);
-        let grid = contacts_with(&world, BroadPhase::Grid(GridBroadPhase::new(0).unwrap()));
+        let brute = world.contacts_with(BroadPhase::BruteForce);
+        let grid = world.contacts_with(BroadPhase::Grid(GridBroadPhase::new(0).unwrap()));
 
         assert_eq!(grid.0, brute.0);
         assert_eq!(grid.1.aabb_pairs, brute.1.aabb_pairs);
@@ -441,12 +443,10 @@ mod tests {
                     .unwrap();
             }
 
-            let brute = contacts_with(&world, BroadPhase::BruteForce);
+            let brute = world.contacts_with(BroadPhase::BruteForce);
             for power in [0, 4, 8] {
-                let grid = contacts_with(
-                    &world,
-                    BroadPhase::Grid(GridBroadPhase::new(power).unwrap()),
-                );
+                let grid =
+                    world.contacts_with(BroadPhase::Grid(GridBroadPhase::new(power).unwrap()));
                 assert_eq!(grid.0, brute.0);
                 assert_eq!(grid.1.aabb_pairs, brute.1.aabb_pairs);
                 assert_eq!(grid.1.contacts, brute.1.contacts);

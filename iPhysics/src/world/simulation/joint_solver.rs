@@ -165,20 +165,22 @@ mod tests {
         )
     }
 
-    fn center_distance_raw(world: &World, a: u64, b: u64) -> u64 {
-        let a = world
-            .body(BodyId::new(a))
-            .unwrap()
-            .state()
-            .transform()
-            .position;
-        let b = world
-            .body(BodyId::new(b))
-            .unwrap()
-            .state()
-            .transform()
-            .position;
-        (b - a).squared_magnitude().isqrt()
+    impl World {
+        fn center_distance_raw(&self, a: u64, b: u64) -> u64 {
+            let a = self
+                .body(BodyId::new(a))
+                .unwrap()
+                .state()
+                .transform()
+                .position;
+            let b = self
+                .body(BodyId::new(b))
+                .unwrap()
+                .state()
+                .transform()
+                .position;
+            (b - a).squared_magnitude().isqrt()
+        }
     }
 
     #[test]
@@ -265,9 +267,7 @@ mod tests {
             world.step();
         }
 
-        assert!(
-            (center_distance_raw(&world, 1, 2) as i64 - (2 * Position::SCALE) as i64).abs() <= 2
-        );
+        assert!((world.center_distance_raw(1, 2) as i64 - (2 * Position::SCALE) as i64).abs() <= 2);
         assert_eq!(
             world
                 .body(BodyId::new(1))
