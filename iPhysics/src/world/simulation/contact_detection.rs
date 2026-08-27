@@ -1,8 +1,8 @@
 mod brute_force;
 mod grid;
 
-use super::constraint::{relative_normal_speed, two_bodies_mut};
 use super::StepStats;
+use super::constraint::{relative_normal_speed, two_bodies_mut};
 use crate::body::{Body, StaticBody};
 use crate::collision::CollisionSolver;
 use crate::geometry::Aabb;
@@ -257,6 +257,7 @@ pub(super) fn wake_impacted_bodies(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::UnitVector;
     use crate::body::{BodyId, BodyState, Material};
     use crate::collider::{Circle, CompositeCollider};
     use crate::quantity::{
@@ -264,7 +265,6 @@ mod tests {
     };
     use crate::transform::Transform;
     use crate::world::{GridBroadPhase, WorldSettings};
-    use crate::UnitVector;
     use alloc::vec;
 
     fn zero_gravity_world() -> World {

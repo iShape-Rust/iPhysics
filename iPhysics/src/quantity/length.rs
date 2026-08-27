@@ -1,6 +1,6 @@
 use crate::ops::quantize::Quantize;
 
-use super::{Position, POSITION_FRACTION_BITS};
+use super::{POSITION_FRACTION_BITS, Position};
 
 /// Non-negative length in metres, stored as unsigned Q16.
 ///
@@ -40,5 +40,11 @@ impl Length {
     #[inline(always)]
     pub fn to_meters(self) -> f64 {
         self.0 as f64 / Self::SCALE as f64
+    }
+
+    #[inline(always)]
+    pub fn sqr_length(self) -> u64 {
+        let l = self.0 as u64;
+        l * l
     }
 }

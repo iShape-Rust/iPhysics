@@ -1,6 +1,6 @@
 use crate::quantity::{
-    integrate, integrate_angular, AngularAcceleration, AngularVelocity, LinearAcceleration,
-    LinearVelocity,
+    AngularAcceleration, AngularVelocity, LinearAcceleration, LinearVelocity, integrate,
+    integrate_angular,
 };
 use crate::transform::Transform;
 

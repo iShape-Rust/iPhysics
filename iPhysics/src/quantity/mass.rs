@@ -14,11 +14,7 @@ impl Mass {
 
     #[inline]
     pub const fn from_raw(raw: u32) -> Option<Self> {
-        if raw == 0 {
-            None
-        } else {
-            Some(Self(raw))
-        }
+        if raw == 0 { None } else { Some(Self(raw)) }
     }
 
     #[inline]

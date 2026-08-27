@@ -65,11 +65,7 @@ impl ContactKey {
         else {
             return Self(base & !Self::CACHEABLE);
         };
-        Self(
-            base
-                | (part_a << Self::PART_A_SHIFT)
-                | (part_b << Self::PART_B_SHIFT),
-        )
+        Self(base | (part_a << Self::PART_A_SHIFT) | (part_b << Self::PART_B_SHIFT))
     }
 
     #[inline(always)]
@@ -110,9 +106,7 @@ impl ContactKey {
     #[inline(always)]
     #[cfg(test)]
     pub(crate) const fn feature_b(self) -> ColliderFeature {
-        Self::decode_feature(
-            ((self.0 >> Self::FEATURE_B_SHIFT) & Self::FEATURE_MASK) as u8,
-        )
+        Self::decode_feature(((self.0 >> Self::FEATURE_B_SHIFT) & Self::FEATURE_MASK) as u8)
     }
 
     #[inline(always)]

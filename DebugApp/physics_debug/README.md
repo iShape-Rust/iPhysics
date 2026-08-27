@@ -10,7 +10,7 @@ cargo run --manifest-path DebugApp/physics_debug/Cargo.toml
 ```
 
 Use the scenario selector for free fall, elastic circle collision, sleeping,
-a small circle pile, seven-row square and domino pyramids, circle/convex and
+a small circle pile, a seven-row square pyramid, a twenty-row domino pyramid, circle/convex and
 convex/convex contacts, a multi-part static playground, a nested-box deep-penetration diagnostic, five
 `DistanceJoint`/`RopeJoint` demonstrations (including a gravity-driven harpoon), and
 deterministic replay comparison. Joint scenes draw their current world anchors;

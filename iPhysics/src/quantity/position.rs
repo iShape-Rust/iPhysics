@@ -1,9 +1,9 @@
-use i_triangle::i_overlay::i_shape::int::IntPoint;
-use super::linear_velocity::LinearVelocity;
 use super::POSITION_FRACTION_BITS;
+use super::linear_velocity::LinearVelocity;
 use crate::geometry::vec::RawVec2;
 use crate::ops::{quantize::Quantize, shift::RoundShift};
 use crate::{Angle, GeometryPoint};
+use i_triangle::i_overlay::i_shape::int::IntPoint;
 
 /// World-space position in metres, stored as signed Q16 components.
 ///

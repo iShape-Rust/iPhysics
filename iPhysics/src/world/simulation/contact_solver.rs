@@ -1,7 +1,7 @@
 use super::constraint::{
-    add_angular_velocity, add_position, add_velocity, contact_inverse_mass_q24,
-    contact_lever_cross_axis, point_speed_along, relative_speed_along_levers, round_shift_signed,
-    two_bodies_mut, MAX_RELATIVE_CONTACT_SPEED_RAW,
+    MAX_RELATIVE_CONTACT_SPEED_RAW, add_angular_velocity, add_position, add_velocity,
+    contact_inverse_mass_q24, contact_lever_cross_axis, point_speed_along,
+    relative_speed_along_levers, round_shift_signed, two_bodies_mut,
 };
 use crate::body::Body;
 use crate::world::contact_cache::{ContactIdentity, HotContact, HotContacts};
@@ -26,7 +26,7 @@ const MAX_FRICTION_RESPONSE_Q31: u64 =
     MAX_TANGENT_ACCUMULATOR_RAW << FRICTION_RESPONSE_FRACTION_BITS;
 const DEFERRED_CONTACT_SPEED_SLOP_RAW: i32 = 8;
 const DEFERRED_CONTACT_RETENTION_Q16: i64 = 7 << 13; // 0.875
-const BLOCKED_VELOCITY_RETENTION_Q16: i64 = 7 << 13; // 0.875
+const BLOCKED_VELOCITY_RETENTION_Q16: i64 = 15 << 12; // 0.9375
 
 #[derive(Debug, Clone, Copy, Default)]
 struct AxisConstraint {
@@ -210,10 +210,9 @@ fn has_inward_contact_velocity(world: &World, constraints: &[ContactConstraint])
         let speed_b = b
             .map(|body| point_speed_along(body, contact.point, contact.normal))
             .unwrap_or(0);
-        let a_is_blocked = speed_a
-            > speed_b.max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
-        let b_is_blocked = b.is_some()
-            && -speed_b > (-speed_a).max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
+        let a_is_blocked = speed_a > speed_b.max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
+        let b_is_blocked =
+            b.is_some() && -speed_b > (-speed_a).max(0) + DEFERRED_CONTACT_SPEED_SLOP_RAW as i64;
         a_is_blocked || b_is_blocked
     })
 }
@@ -383,18 +382,26 @@ fn solve_velocity(world: &mut World, index: usize, constraint: &mut ContactConst
     }
 }
 
-fn project_body_velocities_to_contact(
-    world: &mut World,
-    index: usize,
-) {
+fn project_body_velocities_to_contact(world: &mut World, index: usize) {
     let contact = world.active_contacts[index];
+    let friction_q16 = match contact.body_b {
+        ContactBodyIndex::Static(index_b) => world.bodies[contact.body_a]
+            .material()
+            .combined_friction_raw(world.static_bodies[index_b].material()),
+        ContactBodyIndex::Dynamic(index_b) => world.bodies[contact.body_a]
+            .material()
+            .combined_friction_raw(world.bodies[index_b].material()),
+    };
     match contact.body_b {
-        ContactBodyIndex::Static(_) => {
-            project_body_velocity_pair(&mut world.bodies[contact.body_a], None, &contact)
-        }
+        ContactBodyIndex::Static(_) => project_body_velocity_pair(
+            &mut world.bodies[contact.body_a],
+            None,
+            &contact,
+            friction_q16,
+        ),
         ContactBodyIndex::Dynamic(index_b) => {
             let (a, b) = two_bodies_mut(&mut world.bodies, contact.body_a, index_b);
-            project_body_velocity_pair(a, Some(b), &contact);
+            project_body_velocity_pair(a, Some(b), &contact, friction_q16);
         }
     }
 }
@@ -598,6 +605,7 @@ fn project_body_velocity_pair(
     a: &mut Body,
     mut b: Option<&mut Body>,
     contact: &ActiveContact,
+    friction_q16: u32,
 ) {
     // Project A against B's point speed. If B itself moves inward through A,
     // its speed is not a valid moving boundary and the limit becomes zero.
@@ -605,13 +613,35 @@ fn project_body_velocity_pair(
         .as_deref()
         .map(|body| point_speed_along(body, contact.point, contact.normal))
         .unwrap_or(0);
-    project_single_body_velocity(a, contact, contact.normal, speed_b.max(0));
+    let tangent_a = contact.normal.perpendicular();
+    let tangent_speed_b = b
+        .as_deref()
+        .map(|body| point_speed_along(body, contact.point, tangent_a))
+        .unwrap_or(0);
+    project_single_body_velocity(
+        a,
+        contact,
+        contact.normal,
+        speed_b.max(0),
+        tangent_speed_b,
+        friction_q16,
+    );
 
     // Apply the same rule from B's point of view. Re-read A after its
     // projection so the second limit describes the current contact motion.
     if let Some(body_b) = b.as_deref_mut() {
         let speed_a = point_speed_along(a, contact.point, contact.normal);
-        project_single_body_velocity(body_b, contact, -contact.normal, (-speed_a).max(0));
+        let normal_b = -contact.normal;
+        let tangent_b = normal_b.perpendicular();
+        let tangent_speed_a = point_speed_along(a, contact.point, tangent_b);
+        project_single_body_velocity(
+            body_b,
+            contact,
+            normal_b,
+            (-speed_a).max(0),
+            tangent_speed_a,
+            friction_q16,
+        );
     }
 }
 
@@ -620,6 +650,8 @@ fn project_single_body_velocity(
     contact: &ActiveContact,
     axis: UnitVector,
     contact_speed_limit: i64,
+    contact_tangent_speed: i64,
+    friction_q16: u32,
 ) {
     let body_speed = point_speed_along(body, contact.point, axis);
     let excess = body_speed.saturating_sub(contact_speed_limit);
@@ -643,6 +675,40 @@ fn project_single_body_velocity(
         linear_response,
         0,
         angular_response,
+        0,
+    );
+
+    if friction_q16 == 0 {
+        return;
+    }
+    let tangent = axis.perpendicular();
+    let tangent_lever_q16 = contact_lever_cross_axis(body, contact.point, tangent);
+    let tangent_inverse_sum_q24 = contact_inverse_mass_q24(body, None, tangent_lever_q16, 0);
+    if tangent_inverse_sum_q24 == 0 {
+        return;
+    }
+    let tangent_speed = point_speed_along(body, contact.point, tangent);
+    let desired_tangent_change = tangent_speed.saturating_sub(contact_tangent_speed);
+    let friction_response =
+        friction_response_q31(friction_q16, inverse_sum_q24, tangent_inverse_sum_q24);
+    let tangent_limit =
+        friction_velocity_change_limit_q10(velocity_change as u64, friction_response);
+    let tangent_change = desired_tangent_change.clamp(-tangent_limit, tangent_limit);
+    let tangent_linear_response =
+        linear_response_q31(body.inverse_mass_q24(), tangent_inverse_sum_q24);
+    let tangent_angular_response = angular_response_q17(
+        body.inverse_inertia_q40(),
+        tangent_lever_q16,
+        tangent_inverse_sum_q24,
+    );
+    apply_contact_impulse(
+        body,
+        None,
+        tangent,
+        tangent_change,
+        tangent_linear_response,
+        0,
+        tangent_angular_response,
         0,
     );
 }
@@ -729,9 +795,9 @@ fn apply_deferred_contact_impulse(
 }
 
 /// Applies the correction to the real velocity so this tick cannot advance
-/// farther into the contact. One eighth of the removed motion is
-/// discarded immediately; the retained opposite response is stored on the
-/// bodies and used only as contact-equation input on following ticks.
+/// farther into the contact. One sixteenth of the removed motion is discarded;
+/// the retained opposite response is stored on the bodies and used only as
+/// contact-equation input on following ticks.
 fn apply_contact_impulse_and_defer(
     a: &mut Body,
     b: Option<&mut Body>,
@@ -858,11 +924,7 @@ fn angular_response_q17(inverse_inertia_q40: u64, lever_q16: i32, inverse_sum_q2
     let denominator = (inverse_sum_q24 as u128) << (26 - ANGULAR_RESPONSE_FRACTION_BITS);
     let magnitude = ((numerator + (denominator >> 1)) / denominator)
         .min(MAX_ANGULAR_RESPONSE_Q17 as u128) as i64;
-    if lever_q16 < 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
+    if lever_q16 < 0 { -magnitude } else { magnitude }
 }
 
 #[inline(always)]
@@ -875,11 +937,7 @@ fn angular_velocity_change_raw(velocity_change_q10: i64, angular_response_q17: i
     let product = velocity_change_q10.unsigned_abs() * angular_response_q17.unsigned_abs();
     let magnitude = round_shift(product, ANGULAR_RESPONSE_FRACTION_BITS)
         .min(AngularVelocity::MAX_CHANGE) as i64;
-    if negative {
-        -magnitude
-    } else {
-        magnitude
-    }
+    if negative { -magnitude } else { magnitude }
 }
 
 #[inline(always)]
@@ -1038,9 +1096,11 @@ mod tests {
 
     #[test]
     fn cached_q17_angular_response_tracks_full_width_reference() {
-        assert!(MAX_VELOCITY_CHANGE_RAW
-            .checked_mul(MAX_ANGULAR_RESPONSE_Q17)
-            .is_some());
+        assert!(
+            MAX_VELOCITY_CHANGE_RAW
+                .checked_mul(MAX_ANGULAR_RESPONSE_Q17)
+                .is_some()
+        );
         let velocity_changes = [
             -(MAX_VELOCITY_CHANGE_RAW as i64),
             -(1 << 10),
@@ -1223,7 +1283,7 @@ mod tests {
         );
         assert_eq!(
             world.bodies[0].state().deferred_contact_linear().raw(),
-            [0, -896]
+            [0, -960]
         );
         assert_eq!(
             world.bodies[0].state().deferred_contact_angular(),
@@ -1251,12 +1311,53 @@ mod tests {
 
         capture_blocked_contact_impulses(&mut world, &constraints);
 
-        assert_eq!(world.bodies[0].state().linear_velocity(), LinearVelocity::ZERO);
-        assert_eq!(world.bodies[1].state().linear_velocity(), LinearVelocity::ZERO);
+        assert_eq!(
+            world.bodies[0].state().linear_velocity(),
+            LinearVelocity::ZERO
+        );
+        assert_eq!(
+            world.bodies[1].state().linear_velocity(),
+            LinearVelocity::ZERO
+        );
         assert!(world.bodies[0].state().deferred_contact_linear().is_zero());
         assert_eq!(
             world.bodies[1].state().deferred_contact_linear().raw(),
-            [-896, 0]
+            [-960, 0]
+        );
+    }
+
+    #[test]
+    fn blocked_normal_speed_provides_local_friction_budget() {
+        let material = Material::new(0.0, 1.0).unwrap();
+        let mut world = zero_gravity_world();
+        world.add_body(circle_body(1, 0.0, 0.0, material)).unwrap();
+        world.bodies[0].state_mut().linear_velocity =
+            LinearVelocity::from_meters_per_second(1.0, -1.0).unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::IDENTITY,
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                material,
+            ))
+            .unwrap();
+        world.active_contacts.push(active_contact(
+            0,
+            ContactBodyIndex::Static(0),
+            GeometryPoint::ZERO,
+            UnitVector::from_raw(0, -(1 << 30)),
+        ));
+        let constraints = prepare_constraints(&world);
+
+        capture_blocked_contact_impulses(&mut world, &constraints);
+
+        assert_eq!(
+            world.bodies[0].state().linear_velocity(),
+            LinearVelocity::ZERO
+        );
+        assert_eq!(
+            world.bodies[0].state().deferred_contact_linear().raw(),
+            [0, -960]
         );
     }
 

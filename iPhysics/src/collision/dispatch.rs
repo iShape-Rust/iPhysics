@@ -1,4 +1,4 @@
-use super::{circle_circle, circle_convex, convex_convex, ContactManifold};
+use super::{ContactManifold, circle_circle, circle_convex, convex_convex};
 use crate::body::BodyId;
 use crate::collider::{Collider, SimpleCollider, TransformedVertices};
 use crate::transform::Transform;

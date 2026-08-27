@@ -99,15 +99,17 @@ mod tests {
     #[test]
     fn separated_circles_do_not_collide() {
         let circle = Circle::new(Length::from_meters(1.0).unwrap()).unwrap();
-        assert!(collide(
-            BodyId::new(1),
-            circle,
-            Position::ZERO,
-            BodyId::new(2),
-            circle,
-            Position::from_meters(2.01, 0.0).unwrap(),
-        )
-        .is_none());
+        assert!(
+            collide(
+                BodyId::new(1),
+                circle,
+                Position::ZERO,
+                BodyId::new(2),
+                circle,
+                Position::from_meters(2.01, 0.0).unwrap(),
+            )
+            .is_none()
+        );
     }
 
     #[test]

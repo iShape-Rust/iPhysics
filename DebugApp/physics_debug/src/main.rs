@@ -81,7 +81,7 @@ impl Scenario {
             Self::OffCenterImpact => "Off-center impact",
             Self::BoxStack => "Box stack stability",
             Self::BoxPyramid => "Box pyramid (base 7)",
-            Self::DominoPyramid => "Domino pyramid (base 7)",
+            Self::DominoPyramid => "Domino pyramid (base 20)",
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
@@ -115,7 +115,7 @@ impl Scenario {
             Self::BoxStack => "Six slightly rotated boxes test resting-contact stability.",
             Self::BoxPyramid => "Twenty-eight squares form a seven-row pyramid on a flat floor.",
             Self::DominoPyramid => {
-                "Pi-shaped domino arches form a seven-row pyramid with seven arches at the base."
+                "Pi-shaped domino arches form a twenty-row pyramid with twenty arches at the base."
             }
             Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
             Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
@@ -1307,14 +1307,14 @@ fn block_pyramid_world(
 }
 
 fn domino_pyramid_world() -> World {
-    const BASE_COUNT: usize = 7;
-    const DOMINO_LENGTH: f64 = 0.75;
+    const BASE_COUNT: usize = 20;
+    const DOMINO_LENGTH: f64 = 1.0;
     const DOMINO_THICKNESS: f64 = 0.1875;
     const FLOOR_TOP: f64 = -1.0;
 
     let mut world = World::default();
     let material = Material::new(0.0, 0.8).unwrap();
-    add_static(&mut world, flat_floor(1, material));
+    add_static(&mut world, flat_floor_with_half_width(1, 11.0, material));
 
     let vertical = rectangle(DOMINO_THICKNESS * 0.5, DOMINO_LENGTH * 0.5);
     let horizontal = rectangle(DOMINO_LENGTH * 0.5, DOMINO_THICKNESS * 0.5);
@@ -1691,10 +1691,14 @@ fn angle_degrees(degrees: f64) -> Angle {
 }
 
 fn flat_floor(id: u64, material: Material) -> StaticBody {
+    flat_floor_with_half_width(id, 5.5, material)
+}
+
+fn flat_floor_with_half_width(id: u64, half_width: f64, material: Material) -> StaticBody {
     StaticBody::new(
         BodyId::new(id),
         Transform::new(Position::from_meters(0.0, -1.25).unwrap(), Angle::ZERO),
-        rectangle(5.5, 0.25),
+        rectangle(half_width, 0.25),
         material,
     )
 }
@@ -1832,7 +1836,10 @@ mod tests {
 
         let first_step = world.step();
         assert!(first_step.contacts > 0);
-        for _ in 0..15 {
+        // Position correction is intentionally capped at two slop units per
+        // tick, so a deeply nested shape separates gradually rather than
+        // injecting a large positional shock into contact stacks.
+        for _ in 0..255 {
             world.step();
         }
 
@@ -2015,11 +2022,13 @@ mod tests {
     }
 
     #[test]
-    fn domino_pyramid_has_seven_arches_at_its_base() {
+    fn domino_pyramid_has_twenty_arches_at_its_base() {
+        const BASE_COUNT: usize = 20;
+
         let world = build_world(Scenario::DominoPyramid);
         let material = Material::new(0.0, 0.8).unwrap();
         assert_eq!(world.static_body_count(), 1);
-        assert_eq!(world.body_count(), 2 * (7 + 6 + 5 + 4 + 3 + 2 + 1) + 7);
+        assert_eq!(world.body_count(), BASE_COUNT * (BASE_COUNT + 2));
         assert_eq!(world.static_bodies()[0].material(), material);
         assert!(
             world
@@ -2034,7 +2043,7 @@ mod tests {
             .iter()
             .filter(|body| body.state().transform().position.to_meters()[1] == base_y)
             .count();
-        assert_eq!(base_legs, 8);
+        assert_eq!(base_legs, BASE_COUNT + 1);
 
         let body_aabb = |index: usize| {
             let body = &world.bodies()[index];
@@ -2042,9 +2051,9 @@ mod tests {
         };
         let floor = world.static_bodies()[0].aabb();
         let first_leg = body_aabb(0);
-        let first_beam = body_aabb(8);
-        let second_beam = body_aabb(9);
-        let first_upper_leg = body_aabb(15);
+        let first_beam = body_aabb(BASE_COUNT + 1);
+        let second_beam = body_aabb(BASE_COUNT + 2);
+        let first_upper_leg = body_aabb(2 * BASE_COUNT + 1);
         assert_eq!(floor.max().raw()[1], first_leg.min().raw()[1]);
         assert_eq!(first_leg.max().raw()[1], first_beam.min().raw()[1]);
         assert_eq!(first_beam.max().raw()[0], second_beam.min().raw()[0]);

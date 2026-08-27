@@ -1,6 +1,6 @@
-use i_triangle::i_overlay::i_shape::int::IntPoint;
 use super::UnitVector;
 use crate::quantity::{Position, RawVec2};
+use i_triangle::i_overlay::i_shape::int::IntPoint;
 
 /// Derived world-space Q16 point bounded to `±(2^30 - 1)` per component.
 ///

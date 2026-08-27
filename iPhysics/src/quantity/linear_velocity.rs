@@ -1,8 +1,8 @@
 use crate::geometry::vec::RawVec2;
 use crate::ops::{clamp::ClampToI32, quantize::Quantize};
 
-use super::linear_acceleration::LinearAcceleration;
 use super::LINEAR_VELOCITY_FRACTION_BITS;
+use super::linear_acceleration::LinearAcceleration;
 
 /// Linear velocity in metres per second, stored as signed Q10 components.
 ///

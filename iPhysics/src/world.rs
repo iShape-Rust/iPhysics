@@ -491,11 +491,7 @@ impl World {
 
 #[inline(always)]
 fn canonical_pair(a: BodyId, b: BodyId) -> (BodyId, BodyId) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 impl Default for World {
@@ -721,9 +717,11 @@ mod tests {
                 .length(),
             Length::from_meters(0.5).unwrap()
         );
-        assert!(world
-            .remove_rope_joint(BodyId::new(1), BodyId::new(3))
-            .is_some());
+        assert!(
+            world
+                .remove_rope_joint(BodyId::new(1), BodyId::new(3))
+                .is_some()
+        );
         assert!(world.rope_joints().is_empty());
 
         world.remove_static_body(BodyId::new(2)).unwrap();
