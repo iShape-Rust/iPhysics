@@ -98,21 +98,3 @@ pub(super) fn two_bodies_mut(bodies: &mut [Body], a: usize, b: usize) -> (&mut B
     let (left, right) = bodies.split_at_mut(b);
     (&mut left[a], &mut right[0])
 }
-
-#[inline(always)]
-pub(super) fn div_round_signed(numerator: i128, denominator: u128) -> i64 {
-    debug_assert!(denominator > 0);
-    let magnitude = (numerator.unsigned_abs() + (denominator >> 1)) / denominator;
-    let bounded = magnitude.min(i64::MAX as u128) as i64;
-    if numerator < 0 { -bounded } else { bounded }
-}
-
-#[inline(always)]
-pub(crate) fn round_shift_signed(value: i64, shift: u32) -> i64 {
-    let rounded = (value.unsigned_abs() + (1_u64 << (shift - 1))) >> shift;
-    if value < 0 {
-        -(rounded as i64)
-    } else {
-        rounded as i64
-    }
-}

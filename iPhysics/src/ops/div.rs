@@ -8,6 +8,10 @@ pub(crate) trait DivRound {
     fn div_round(self, denominator: Self) -> Self;
 }
 
+pub(crate) trait DivRoundSigned {
+    fn div_round_signed(self, denominator: u128) -> i64;
+}
+
 impl DivRound for i128 {
     #[inline(always)]
     fn div_round(self, denominator: Self) -> Self {
@@ -21,6 +25,16 @@ impl DivRound for i128 {
         } else {
             magnitude as i128
         }
+    }
+}
+
+impl DivRoundSigned for i128 {
+    #[inline(always)]
+    fn div_round_signed(self, denominator: u128) -> i64 {
+        debug_assert!(denominator > 0);
+        let magnitude = (self.unsigned_abs() + (denominator >> 1)) / denominator;
+        let bounded = magnitude.min(i64::MAX as u128) as i64;
+        if self < 0 { -bounded } else { bounded }
     }
 }
 
@@ -66,5 +80,13 @@ mod tests {
         assert_eq!(5_i128.div_round(2), 3);
         assert_eq!((-5_i128).div_round(2), -3);
         assert_eq!(5_i128.div_round(-2), -3);
+    }
+
+    #[test]
+    fn signed_division_to_i64_rounds_and_saturates() {
+        assert_eq!(5_i128.div_round_signed(2), 3);
+        assert_eq!((-5_i128).div_round_signed(2), -3);
+        assert_eq!(i128::MAX.div_round_signed(1), i64::MAX);
+        assert_eq!(i128::MIN.div_round_signed(1), -i64::MAX);
     }
 }

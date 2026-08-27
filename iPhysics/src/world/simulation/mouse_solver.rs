@@ -1,5 +1,6 @@
-use super::constraint::{contact_inverse_mass_q24, div_round_signed, round_shift_signed};
+use super::constraint::contact_inverse_mass_q24;
 use crate::body::Body;
+use crate::ops::{div::DivRoundSigned, shift::RoundShift};
 use crate::world::World;
 use crate::{GeometryPoint, UnitVector};
 
@@ -46,8 +47,8 @@ impl World {
         let [error_x, error_y] = error.raw();
         let response = joint.response_raw() as i64;
         let desired_velocity = [
-            round_shift_signed(error_x as i64 * response, 16),
-            round_shift_signed(error_y as i64 * response, 16),
+            (error_x as i64 * response).round_shift(16),
+            (error_y as i64 * response).round_shift(16),
         ];
         let max_impulse = joint.max_force().impulse_per_tick_q10();
 
@@ -82,18 +83,14 @@ impl Body {
         let velocity_change_y =
             desired_velocity_q10[1].saturating_sub(self.point_speed_along(anchor, y_axis));
         let impulse_change = [
-            div_round_signed(
-                (inverse_yy as i128 * velocity_change_x as i128
-                    - inverse_xy * velocity_change_y as i128)
-                    << 24,
-                determinant,
-            ),
-            div_round_signed(
-                (inverse_xx as i128 * velocity_change_y as i128
-                    - inverse_xy * velocity_change_x as i128)
-                    << 24,
-                determinant,
-            ),
+            ((inverse_yy as i128 * velocity_change_x as i128
+                - inverse_xy * velocity_change_y as i128)
+                << 24)
+                .div_round_signed(determinant),
+            ((inverse_xx as i128 * velocity_change_y as i128
+                - inverse_xy * velocity_change_x as i128)
+                << 24)
+                .div_round_signed(determinant),
         ];
         let previous = impulse_state.impulse_q10;
         let mut candidate = [

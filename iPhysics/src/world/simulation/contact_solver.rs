@@ -1,8 +1,9 @@
 use super::constraint::{
     MAX_RELATIVE_CONTACT_SPEED_RAW, contact_inverse_mass_q24, relative_speed_along_levers,
-    round_shift_signed, two_bodies_mut,
+    two_bodies_mut,
 };
 use crate::body::Body;
+use crate::ops::shift::RoundShift;
 use crate::world::contact_cache::{ContactIdentity, HotContact, HotContacts};
 use crate::world::{ActiveContact, ContactBodyIndex, World};
 use crate::{AngularVelocity, LinearVelocity, UnitVector};
@@ -157,11 +158,11 @@ impl World {
             let [x, y] = body.state().deferred_contact_linear().raw();
             let angular = body.state().deferred_contact_angular().raw();
             body.state_mut().deferred_contact_linear = LinearVelocity::from_wide_saturated(
-                round_shift_signed(x as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
-                round_shift_signed(y as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+                (x as i64 * DEFERRED_CONTACT_RETENTION_Q16).round_shift(16),
+                (y as i64 * DEFERRED_CONTACT_RETENTION_Q16).round_shift(16),
             );
             body.state_mut().deferred_contact_angular = AngularVelocity::from_wide_saturated(
-                round_shift_signed(angular as i64 * DEFERRED_CONTACT_RETENTION_Q16, 16),
+                (angular as i64 * DEFERRED_CONTACT_RETENTION_Q16).round_shift(16),
             );
         }
     }
@@ -849,7 +850,7 @@ fn apply_contact_impulse_and_defer(
 
 #[inline(always)]
 fn retain_blocked_velocity(value: i64) -> i64 {
-    round_shift_signed(value * BLOCKED_VELOCITY_RETENTION_Q16, 16)
+    (value * BLOCKED_VELOCITY_RETENTION_Q16).round_shift(16)
 }
 
 #[inline(always)]

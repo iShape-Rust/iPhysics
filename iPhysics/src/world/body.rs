@@ -1,4 +1,4 @@
-use crate::world::simulation::constraint::round_shift_signed;
+use crate::ops::shift::RoundShift;
 use crate::{
     AngularVelocity, Body, BodyId, GeometryPoint, LinearVelocity, Position, UnitVector, World,
 };
@@ -87,7 +87,7 @@ impl Body {
         let inverse_mass = self.inverse_mass_q24() as u64;
         // Force is Q16/u32, so its per-tick Q10 impulse is at most 2^20 and the
         // signed linear product fits i64.
-        let linear_change = round_shift_signed(impulse_q10 * inverse_mass as i64, 24);
+        let linear_change = (impulse_q10 * inverse_mass as i64).round_shift(24);
         let [change_x, change_y] = axis.scaled_wide_raw(linear_change.unsigned_abs());
         if linear_change < 0 {
             self.add_velocity(-change_x, -change_y);

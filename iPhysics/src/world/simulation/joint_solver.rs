@@ -1,6 +1,7 @@
-use super::constraint::{div_round_signed, round_shift_signed, scalar_inverse_mass_q24};
+use super::constraint::scalar_inverse_mass_q24;
 use crate::UnitVector;
 use crate::body::BodyId;
+use crate::ops::{div::DivRoundSigned, shift::RoundShift};
 use crate::quantity::{Length, Position};
 use crate::world::World;
 use crate::world::body::BodyIndex;
@@ -131,12 +132,12 @@ impl World {
         // Axis is A -> B. A positive error means the anchors are too far apart,
         // so the desired B-relative-to-A speed and resulting impulse are negative.
         let error_q16 = current_length as i64 - target_length.raw() as i64;
-        let desired_speed_q10 = -round_shift_signed(error_q16 * response_q16 as i64, 16);
+        let desired_speed_q10 = -(error_q16 * response_q16 as i64).round_shift(16);
         let relative_speed_q10 = self.endpoint_speed(endpoint_b, anchor_b, axis)
             - self.endpoint_speed(endpoint_a, anchor_a, axis);
         let velocity_change_q10 = desired_speed_q10.saturating_sub(relative_speed_q10);
         let impulse_change_q10 =
-            div_round_signed((velocity_change_q10 as i128) << 24, inverse_mass as u128);
+            ((velocity_change_q10 as i128) << 24).div_round_signed(inverse_mass as u128);
 
         let previous = *accumulated_impulse_q10;
         let max_impulse = max_impulse_q10.min(i64::MAX as u64) as i64;
