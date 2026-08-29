@@ -85,7 +85,7 @@ impl WorldSettings {
                 Some(value) => value,
                 None => unreachable!(),
             },
-            velocity_iterations: 20,
+            velocity_iterations: 8,
             sleep: SleepConfig::FAST_EFFECTS,
         }
     }

@@ -43,6 +43,7 @@ impl World {
             self.solve_velocities(&mut contact_constraints, false);
             reverse = !reverse;
         }
+        self.solve_shock_velocities(&mut contact_constraints);
         self.solve_final_static_velocities(&mut contact_constraints);
         self.rebuild_contact_cache(&contact_constraints);
         self.clear_contact_solver_scratch();

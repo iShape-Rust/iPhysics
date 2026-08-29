@@ -66,7 +66,7 @@ pub(super) fn relative_speed_along_levers(
 }
 
 #[inline(always)]
-fn rotational_inverse_mass_q24(lever_q16: i32, inverse_inertia_q40: u64) -> u64 {
+pub(super) fn rotational_inverse_mass_q24(lever_q16: i32, inverse_inertia_q40: u64) -> u64 {
     // (Q16)^2 * Q40 -> Q72; shift to the inverse-mass Q24 used by k.
     let lever = lever_q16.unsigned_abs() as u128;
     let product = lever * lever * inverse_inertia_q40 as u128;
