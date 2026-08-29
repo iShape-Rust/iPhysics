@@ -2,7 +2,8 @@ use crate::world::simulation::constraint::{relative_speed_along, two_bodies_mut}
 use crate::{Body, BodyId, RopeJoint, StepStats, World};
 use alloc::vec;
 
-const WAKE_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
+use super::IMPACT_SPEED_RAW;
+
 const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 
 impl World {
@@ -44,8 +45,8 @@ impl World {
                 contact.point,
                 contact.normal,
             );
-            let strong =
-                normal_speed < -WAKE_SPEED_RAW || contact.penetration.raw() > WAKE_PENETRATION_RAW;
+            let strong = normal_speed < -IMPACT_SPEED_RAW
+                || contact.penetration.raw() > WAKE_PENETRATION_RAW;
             if strong {
                 self.bodies[contact.body_a].state_mut().wake();
             }
@@ -58,8 +59,8 @@ impl World {
                 contact.point,
                 contact.normal,
             );
-            let strong =
-                normal_speed < -WAKE_SPEED_RAW || contact.penetration.raw() > WAKE_PENETRATION_RAW;
+            let strong = normal_speed < -IMPACT_SPEED_RAW
+                || contact.penetration.raw() > WAKE_PENETRATION_RAW;
             if strong {
                 let (a, b) = two_bodies_mut(&mut self.bodies, contact.body_a, contact.body_b);
                 a.state_mut().wake();

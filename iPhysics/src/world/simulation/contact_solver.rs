@@ -1,3 +1,4 @@
+use super::IMPACT_SPEED_RAW;
 use super::constraint::{
     MAX_RELATIVE_CONTACT_SPEED_RAW, relative_speed_along_levers, rotational_inverse_mass_q24,
     scalar_inverse_mass_q24, two_bodies_mut,
@@ -1068,7 +1069,7 @@ fn angular_velocity_change_raw(velocity_change_q10: i64, angular_response_q17: i
 #[inline(always)]
 fn restitution_target_speed(normal_speed: i32, restitution: u32) -> u64 {
     debug_assert!(restitution <= 1 << 16);
-    if normal_speed >= 0 {
+    if normal_speed >= -IMPACT_SPEED_RAW {
         return 0;
     }
     let closing_speed = normal_speed.unsigned_abs() as u64;
@@ -1415,6 +1416,18 @@ mod tests {
         assert_eq!(impulse, MAX_VELOCITY_CHANGE_RAW);
         assert!(impulse <= u32::MAX as u64);
         assert_eq!(div_round(impulse * inverse_mass, inverse_sum), impulse / 2);
+    }
+
+    #[test]
+    fn restitution_ignores_resting_contact_speeds() {
+        let elastic = Material::ELASTIC.restitution_raw();
+
+        assert_eq!(restitution_target_speed(0, elastic), 0);
+        assert_eq!(restitution_target_speed(-IMPACT_SPEED_RAW, elastic), 0);
+        assert_eq!(
+            restitution_target_speed(-IMPACT_SPEED_RAW - 1, elastic),
+            (IMPACT_SPEED_RAW + 1) as u64
+        );
     }
 
     #[test]

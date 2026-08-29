@@ -4,6 +4,11 @@ mod contact_solver;
 mod joint_solver;
 mod sleep;
 
+// Contacts at or below this closing speed are treated as resting contacts. Applying
+// restitution to gravity's single-tick velocity would otherwise create a
+// permanent low-speed bounce that can never satisfy the sleep threshold.
+const IMPACT_SPEED_RAW: i32 = 205; // approximately 0.2 m/s in Q10
+
 pub(in crate::world) use contact_detection::BroadPhaseScratch;
 pub(in crate::world) use contact_solver::ContactSolverScratch;
 

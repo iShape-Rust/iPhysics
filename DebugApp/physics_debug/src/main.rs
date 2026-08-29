@@ -28,6 +28,7 @@ enum Scenario {
     RestitutionComparison,
     OffCenterImpact,
     BoxStack,
+    BoxStackRestitution,
     BoxPyramid,
     DominoPyramid,
     CircleVsConvex,
@@ -43,7 +44,7 @@ enum Scenario {
 }
 
 impl Scenario {
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
@@ -54,6 +55,7 @@ impl Scenario {
         Self::RestitutionComparison,
         Self::OffCenterImpact,
         Self::BoxStack,
+        Self::BoxStackRestitution,
         Self::BoxPyramid,
         Self::DominoPyramid,
         Self::CircleVsConvex,
@@ -80,6 +82,7 @@ impl Scenario {
             Self::RestitutionComparison => "Restitution comparison",
             Self::OffCenterImpact => "Off-center impact",
             Self::BoxStack => "Box stack stability",
+            Self::BoxStackRestitution => "Box stack stability (restitution 0.6)",
             Self::BoxPyramid => "Box pyramid (base 7)",
             Self::DominoPyramid => "Domino pyramid (base 10)",
             Self::CircleVsConvex => "Circle vs convex",
@@ -113,6 +116,9 @@ impl Scenario {
                 "A circle strikes above a box center to exercise angular impulse response."
             }
             Self::BoxStack => "Six slightly rotated boxes test resting-contact stability.",
+            Self::BoxStackRestitution => {
+                "The same six-box stack with restitution 0.6 on every contact."
+            }
             Self::BoxPyramid => "Twenty-eight squares form a seven-row pyramid on a flat floor.",
             Self::DominoPyramid => {
                 "Pi-shaped domino arches form a ten-row pyramid with ten arches at the base."
@@ -1136,27 +1142,8 @@ fn build_world(scenario: Scenario) -> World {
             );
             world
         }
-        Scenario::BoxStack => {
-            let mut world = World::default();
-            add_static(&mut world, flat_floor(1, Material::INELASTIC));
-            for level in 0..6 {
-                let angle = if level % 2 == 0 { 1.5 } else { -1.5 };
-                add(
-                    &mut world,
-                    dynamic_convex(
-                        level + 2,
-                        0.0,
-                        -0.63 + level as f64 * 0.72,
-                        angle_degrees(angle),
-                        rectangle(0.65, 0.35),
-                        0.0,
-                        0.0,
-                        Material::INELASTIC,
-                    ),
-                );
-            }
-            world
-        }
+        Scenario::BoxStack => box_stack_world(Material::INELASTIC),
+        Scenario::BoxStackRestitution => box_stack_world(Material::new(0.6, 0.5).unwrap()),
         Scenario::BoxPyramid => block_pyramid_world(0.32, 0.32, 0.68, 0.68),
         Scenario::DominoPyramid => domino_pyramid_world(),
         Scenario::CircleVsConvex => {
@@ -1270,6 +1257,28 @@ fn build_world(scenario: Scenario) -> World {
             world
         }
     }
+}
+
+fn box_stack_world(material: Material) -> World {
+    let mut world = World::default();
+    add_static(&mut world, flat_floor(1, material));
+    for level in 0..6 {
+        let angle = if level % 2 == 0 { 1.5 } else { -1.5 };
+        add(
+            &mut world,
+            dynamic_convex(
+                level + 2,
+                0.0,
+                -0.63 + level as f64 * 0.72,
+                angle_degrees(angle),
+                rectangle(0.65, 0.35),
+                0.0,
+                0.0,
+                material,
+            ),
+        );
+    }
+    world
 }
 
 fn block_pyramid_world(
@@ -1996,6 +2005,7 @@ mod tests {
             Scenario::RestitutionComparison,
             Scenario::OffCenterImpact,
             Scenario::BoxStack,
+            Scenario::BoxStackRestitution,
             Scenario::BoxPyramid,
             Scenario::DominoPyramid,
             Scenario::CircleVsConvex,
@@ -2010,6 +2020,20 @@ mod tests {
             }
             assert!(contact_seen, "{} produced no contacts", scenario.label());
         }
+    }
+
+    #[test]
+    fn restitution_box_stack_uses_point_six_for_every_body() {
+        let world = build_world(Scenario::BoxStackRestitution);
+        let material = Material::new(0.6, 0.5).unwrap();
+
+        assert_eq!(world.static_bodies()[0].material(), material);
+        assert!(
+            world
+                .bodies()
+                .iter()
+                .all(|body| body.material() == material)
+        );
     }
 
     #[test]
@@ -2203,5 +2227,36 @@ mod tests {
         }
 
         panic!("dynamic circle did not reach sleep within 512 ticks");
+    }
+
+    #[test]
+    fn sub_elastic_restitution_bodies_reach_sleep() {
+        let mut world = build_world(Scenario::RestitutionComparison);
+
+        for _ in 0..4096 {
+            world.step();
+            if world
+                .bodies()
+                .iter()
+                .filter(|body| body.id() != BodyId::new(4))
+                .all(|body| body.state().is_sleeping())
+            {
+                return;
+            }
+        }
+
+        let states = world
+            .bodies()
+            .iter()
+            .map(|body| {
+                (
+                    body.id(),
+                    body.state().transform().position.to_meters(),
+                    body.state().linear_velocity().to_meters_per_second(),
+                    body.state().sleep_ticks(),
+                )
+            })
+            .collect::<Vec<_>>();
+        panic!("sub-elastic bodies did not reach sleep: {states:?}");
     }
 }
