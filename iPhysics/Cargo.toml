@@ -10,7 +10,6 @@ repository = "https://github.com/iShape-Rust/iTriangle"
 
 
 [dependencies]
-i_key_sort = "0.11.0"
 i_triangle = "0.47.0"
 
 [dev-dependencies]

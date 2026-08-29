@@ -25,7 +25,6 @@ impl World {
 
         let mut stats = self.build_contacts();
         self.wake_impacted_bodies();
-        self.decay_deferred_contact_impulses();
 
         let mut contact_constraints = self.prepare_constraints();
         self.prepare_warm_start(&mut contact_constraints);
@@ -44,7 +43,6 @@ impl World {
             reverse = !reverse;
         }
         self.solve_final_static_velocities(&mut contact_constraints);
-        self.capture_blocked_contact_impulses(&contact_constraints);
         self.rebuild_contact_cache(&contact_constraints);
         self.correct_positions();
         self.integrate_transforms();

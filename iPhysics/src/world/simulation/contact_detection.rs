@@ -9,8 +9,6 @@ use crate::world::{
     ActiveContactData, ActiveContactDynamic, ActiveContactStatic, BroadPhase, World,
 };
 use alloc::vec::Vec;
-use core::ops::Deref;
-use i_key_sort::sort::two_keys_cmp::TwoKeysAndCmpSort;
 
 const AUTO_BRUTE_FORCE_LIMIT: usize = 64;
 
@@ -30,8 +28,6 @@ enum ProxyBodyIndex {
 pub(in crate::world) struct BroadPhaseScratch {
     proxies: Vec<AabbProxy>,
     grid: grid::Scratch,
-    static_contact_sort_buffer: Vec<ActiveContactStatic>,
-    dynamic_contact_sort_buffer: Vec<ActiveContactDynamic>,
 }
 
 impl BroadPhaseScratch {
@@ -39,16 +35,12 @@ impl BroadPhaseScratch {
         Self {
             proxies: Vec::new(),
             grid: grid::Scratch::new(),
-            static_contact_sort_buffer: Vec::new(),
-            dynamic_contact_sort_buffer: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
         self.proxies.clear();
         self.grid.clear();
-        self.static_contact_sort_buffer.clear();
-        self.dynamic_contact_sort_buffer.clear();
     }
 }
 
@@ -69,12 +61,7 @@ impl World {
             collision_solver: CollisionSolver::new(),
         };
 
-        let stats = detector.detect(
-            self.settings.broad_phase,
-            &mut scratch.grid,
-            &mut scratch.static_contact_sort_buffer,
-            &mut scratch.dynamic_contact_sort_buffer,
-        );
+        let stats = detector.detect(self.settings.broad_phase, &mut scratch.grid);
         scratch.clear();
         stats
     }
@@ -108,13 +95,7 @@ fn build_proxies(bodies: &[Body], static_bodies: &[StaticBody], proxies: &mut Ve
 }
 
 impl Detector<'_> {
-    fn detect(
-        mut self,
-        broad_phase: BroadPhase,
-        grid_scratch: &mut grid::Scratch,
-        static_contact_sort_buffer: &mut Vec<ActiveContactStatic>,
-        dynamic_contact_sort_buffer: &mut Vec<ActiveContactDynamic>,
-    ) -> StepStats {
+    fn detect(mut self, broad_phase: BroadPhase, grid_scratch: &mut grid::Scratch) -> StepStats {
         match broad_phase {
             BroadPhase::BruteForce => self.detect_brute_force(),
             BroadPhase::Grid(settings) => self.detect_grid(grid_scratch, settings),
@@ -124,8 +105,6 @@ impl Detector<'_> {
             BroadPhase::Auto(settings) => self.detect_grid(grid_scratch, settings),
         }
 
-        sort_top_down(self.active_static_contacts, static_contact_sort_buffer);
-        sort_top_down(self.active_dynamic_contacts, dynamic_contact_sort_buffer);
         self.stats.contacts =
             self.active_static_contacts.len() + self.active_dynamic_contacts.len();
         self.stats
@@ -229,23 +208,9 @@ impl Detector<'_> {
     }
 }
 
-fn sort_top_down<T>(active_contacts: &mut [T], buffer: &mut Vec<T>)
-where
-    T: Copy + Deref<Target = ActiveContactData>,
-{
-    active_contacts.sort_by_two_keys_then_by_and_buffer(
-        false,
-        buffer,
-        |contact| -contact.point.raw()[1],
-        |contact| contact.point.raw()[0],
-        |a, b| a.body_a.cmp(&b.body_a),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UnitVector;
     use crate::body::{BodyId, BodyState, Material};
     use crate::collider::{Circle, CompositeCollider};
     use crate::quantity::{
@@ -302,41 +267,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn active_contacts_are_sorted_top_down_with_deterministic_ties() {
-        let mut world = zero_gravity_world();
-        for (pair_index, x, y) in [
-            (0, 0.0, 0.0),
-            (1, 1.0, 2.0),
-            (2, 0.0, 1.0),
-            (3, -1.0, 2.0),
-            (4, -1.0, 2.0),
-        ] {
-            world.active_static_contacts.push(ActiveContactStatic {
-                body_b: 0,
-                data: ActiveContactData {
-                    body_a: pair_index as usize,
-                    point: Position::from_meters(x, y).unwrap().into(),
-                    normal: UnitVector::X,
-                    penetration: Length::ZERO,
-                    key: crate::collision::ContactKey::new(
-                        crate::collision::ColliderFeature::Circle,
-                        crate::collision::ColliderFeature::Circle,
-                    )
-                    .with_correct_position(true),
-                },
-            });
+    fn assert_same_contacts<T: PartialEq + core::fmt::Debug>(expected: Vec<T>, mut actual: Vec<T>) {
+        assert_eq!(actual.len(), expected.len());
+        for contact in expected {
+            let index = actual
+                .iter()
+                .position(|candidate| *candidate == contact)
+                .unwrap_or_else(|| panic!("missing contact: {contact:?}"));
+            actual.remove(index);
         }
-
-        let mut buffer = Vec::new();
-        sort_top_down(&mut world.active_static_contacts, &mut buffer);
-
-        let body_indices = world
-            .active_static_contacts
-            .iter()
-            .map(|contact| contact.body_a)
-            .collect::<alloc::vec::Vec<_>>();
-        assert_eq!(body_indices, [3, 4, 1, 2, 0]);
     }
 
     #[test]
@@ -361,8 +300,8 @@ mod tests {
         let brute = world.contacts_with(BroadPhase::BruteForce);
         let grid = world.contacts_with(BroadPhase::Grid(GridBroadPhase::new(0).unwrap()));
 
-        assert_eq!(grid.0, brute.0);
-        assert_eq!(grid.1, brute.1);
+        assert_same_contacts(brute.0, grid.0);
+        assert_same_contacts(brute.1, grid.1);
         assert_eq!(grid.2.aabb_pairs, brute.2.aabb_pairs);
         assert_eq!(grid.2.contacts, brute.2.contacts);
         assert!(grid.2.tested_pairs < brute.2.tested_pairs);
@@ -487,8 +426,8 @@ mod tests {
             for power in [0, 4, 8] {
                 let grid =
                     world.contacts_with(BroadPhase::Grid(GridBroadPhase::new(power).unwrap()));
-                assert_eq!(grid.0, brute.0);
-                assert_eq!(grid.1, brute.1);
+                assert_same_contacts(brute.0.clone(), grid.0);
+                assert_same_contacts(brute.1.clone(), grid.1);
                 assert_eq!(grid.2.aabb_pairs, brute.2.aabb_pairs);
                 assert_eq!(grid.2.contacts, brute.2.contacts);
             }

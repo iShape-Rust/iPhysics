@@ -61,11 +61,6 @@ pub struct BodyState {
     pub(crate) transform: Transform,
     pub(crate) linear_velocity: LinearVelocity,
     pub(crate) angular_velocity: AngularVelocity,
-    // Velocity response of contact impulses that stopped this body during the
-    // previous tick. It is consulted only by the contact solver and is never
-    // integrated into the transform directly.
-    pub(crate) deferred_contact_linear: LinearVelocity,
-    pub(crate) deferred_contact_angular: AngularVelocity,
     sleep_ticks: u8,
     sleeping: bool,
 }
@@ -81,8 +76,6 @@ impl BodyState {
             transform,
             linear_velocity,
             angular_velocity,
-            deferred_contact_linear: LinearVelocity::ZERO,
-            deferred_contact_angular: AngularVelocity::ZERO,
             sleep_ticks: 0,
             sleeping: false,
         }
@@ -109,22 +102,6 @@ impl BodyState {
     }
 
     #[inline(always)]
-    pub(crate) const fn deferred_contact_linear(&self) -> LinearVelocity {
-        self.deferred_contact_linear
-    }
-
-    #[inline(always)]
-    pub(crate) const fn deferred_contact_angular(&self) -> AngularVelocity {
-        self.deferred_contact_angular
-    }
-
-    #[inline(always)]
-    pub(crate) fn clear_deferred_contact_impulse(&mut self) {
-        self.deferred_contact_linear = LinearVelocity::ZERO;
-        self.deferred_contact_angular = AngularVelocity::ZERO;
-    }
-
-    #[inline(always)]
     pub const fn sleep_ticks(&self) -> u8 {
         self.sleep_ticks
     }
@@ -139,21 +116,18 @@ impl BodyState {
     #[inline(always)]
     pub fn set_transform(&mut self, transform: Transform) {
         self.transform = transform;
-        self.clear_deferred_contact_impulse();
         self.wake();
     }
 
     #[inline(always)]
     pub fn set_linear_velocity(&mut self, velocity: LinearVelocity) {
         self.linear_velocity = velocity;
-        self.clear_deferred_contact_impulse();
         self.wake();
     }
 
     #[inline(always)]
     pub fn set_angular_velocity(&mut self, velocity: AngularVelocity) {
         self.angular_velocity = velocity;
-        self.clear_deferred_contact_impulse();
         self.wake();
     }
 
@@ -210,7 +184,6 @@ impl BodyState {
 
         self.linear_velocity = LinearVelocity::ZERO;
         self.angular_velocity = AngularVelocity::ZERO;
-        self.clear_deferred_contact_impulse();
         self.sleeping = true;
         true
     }
