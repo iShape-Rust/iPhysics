@@ -43,6 +43,7 @@ impl World {
             self.solve_velocities(&mut contact_constraints, false);
             reverse = !reverse;
         }
+        self.solve_final_static_velocities(&mut contact_constraints);
         self.capture_blocked_contact_impulses(&contact_constraints);
         self.rebuild_contact_cache(&contact_constraints);
         self.correct_positions();
@@ -130,7 +131,8 @@ mod tests {
         first.step();
         assert_eq!(first.hot_contacts[0].len(), 1);
         let mut replay = first.clone();
-        first.active_contacts.clear();
+        first.active_static_contacts.clear();
+        first.active_dynamic_contacts.clear();
 
         for _ in 0..32 {
             first.step();
@@ -138,7 +140,11 @@ mod tests {
         }
 
         assert_eq!(first.bodies(), replay.bodies());
-        assert_eq!(first.active_contacts, replay.active_contacts);
+        assert_eq!(first.active_static_contacts, replay.active_static_contacts);
+        assert_eq!(
+            first.active_dynamic_contacts,
+            replay.active_dynamic_contacts
+        );
         assert_eq!(first.hot_contacts, replay.hot_contacts);
     }
 

@@ -1,4 +1,3 @@
-use crate::world::ContactBodyIndex;
 use crate::world::simulation::constraint::{relative_speed_along, two_bodies_mut};
 use crate::{Body, BodyId, RopeJoint, StepStats, World};
 use alloc::vec;
@@ -9,11 +8,12 @@ const WAKE_PENETRATION_RAW: u32 = 655; // approximately 0.01 m in Q16
 impl World {
     pub(crate) fn update_sleep_states(&mut self, stats: &mut StepStats) {
         let mut has_contact = vec![false; self.bodies.len()];
-        for contact in self.active_contacts.iter().copied() {
+        for contact in self.active_static_contacts.iter().copied() {
             has_contact[contact.body_a] = true;
-            if let ContactBodyIndex::Dynamic(index_b) = contact.body_b {
-                has_contact[index_b] = true;
-            }
+        }
+        for contact in self.active_dynamic_contacts.iter().copied() {
+            has_contact[contact.body_a] = true;
+            has_contact[contact.body_b] = true;
         }
 
         let mut has_mouse_joint = vec![false; self.bodies.len()];
@@ -37,36 +37,33 @@ impl World {
         }
     }
     pub(crate) fn wake_impacted_bodies(&mut self) {
-        for contact in self.active_contacts.iter().copied() {
-            let normal_speed = match contact.body_b {
-                ContactBodyIndex::Dynamic(index_b) => relative_speed_along(
-                    &self.bodies[contact.body_a],
-                    Some(&self.bodies[index_b]),
-                    contact.point,
-                    contact.normal,
-                ),
-                ContactBodyIndex::Static(_) => relative_speed_along(
-                    &self.bodies[contact.body_a],
-                    None,
-                    contact.point,
-                    contact.normal,
-                ),
-            };
+        for contact in self.active_static_contacts.iter().copied() {
+            let normal_speed = relative_speed_along(
+                &self.bodies[contact.body_a],
+                None,
+                contact.point,
+                contact.normal,
+            );
             let strong =
                 normal_speed < -WAKE_SPEED_RAW || contact.penetration.raw() > WAKE_PENETRATION_RAW;
-            if !strong {
-                continue;
+            if strong {
+                self.bodies[contact.body_a].state_mut().wake();
             }
+        }
 
-            match contact.body_b {
-                ContactBodyIndex::Dynamic(index_b) => {
-                    let (a, b) = two_bodies_mut(&mut self.bodies, contact.body_a, index_b);
-                    a.state_mut().wake();
-                    b.state_mut().wake();
-                }
-                ContactBodyIndex::Static(_) => {
-                    self.bodies[contact.body_a].state_mut().wake();
-                }
+        for contact in self.active_dynamic_contacts.iter().copied() {
+            let normal_speed = relative_speed_along(
+                &self.bodies[contact.body_a],
+                Some(&self.bodies[contact.body_b]),
+                contact.point,
+                contact.normal,
+            );
+            let strong =
+                normal_speed < -WAKE_SPEED_RAW || contact.penetration.raw() > WAKE_PENETRATION_RAW;
+            if strong {
+                let (a, b) = two_bodies_mut(&mut self.bodies, contact.body_a, contact.body_b);
+                a.state_mut().wake();
+                b.state_mut().wake();
             }
         }
     }

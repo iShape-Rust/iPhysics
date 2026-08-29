@@ -12,7 +12,7 @@ use crate::quantity::Length;
 use crate::transform::Transform;
 use alloc::vec::Vec;
 use contact_cache::HotContacts;
-use core::{fmt, iter::FusedIterator, slice};
+use core::{fmt, iter::FusedIterator, ops::Deref, slice};
 
 pub use settings::{BroadPhase, GridBroadPhase, WorldSettings};
 use simulation::BroadPhaseScratch;
@@ -113,7 +113,8 @@ pub struct World {
     settings: WorldSettings,
     bodies: Vec<Body>,
     static_bodies: Vec<StaticBody>,
-    active_contacts: Vec<ActiveContact>,
+    active_static_contacts: Vec<ActiveContactStatic>,
+    active_dynamic_contacts: Vec<ActiveContactDynamic>,
     mouse_joints: Vec<MouseJoint>,
     distance_joints: Vec<DistanceJoint>,
     rope_joints: Vec<RopeJoint>,
@@ -121,12 +122,11 @@ pub struct World {
     hot_contacts: Vec<HotContacts>,
 }
 
-/// Solver contact using direct indices into the world's body storage.
+/// Data shared by static and dynamic solver contacts.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActiveContact {
+pub(crate) struct ActiveContactData {
     pub(crate) body_a: usize,
-    pub(crate) body_b: ContactBodyIndex,
     pub(crate) point: GeometryPoint,
     pub(crate) normal: UnitVector,
     pub(crate) penetration: Length,
@@ -134,16 +134,45 @@ pub(crate) struct ActiveContact {
     pub(crate) key: ContactKey,
 }
 
+/// Solver contact between a dynamic body and a static body.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ContactBodyIndex {
-    Dynamic(usize),
-    Static(usize),
+pub(crate) struct ActiveContactStatic {
+    pub(crate) body_b: usize,
+    pub(crate) data: ActiveContactData,
+}
+
+/// Solver contact between two dynamic bodies.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActiveContactDynamic {
+    pub(crate) body_b: usize,
+    pub(crate) data: ActiveContactData,
+}
+
+impl Deref for ActiveContactStatic {
+    type Target = ActiveContactData;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl Deref for ActiveContactDynamic {
+    type Target = ActiveContactData;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 /// Allocation-free view of contacts produced by the most recent simulation step.
 #[derive(Clone)]
 pub struct Contacts<'a> {
-    active: slice::Iter<'a, ActiveContact>,
+    static_contacts: slice::Iter<'a, ActiveContactStatic>,
+    dynamic_contacts: slice::Iter<'a, ActiveContactDynamic>,
     bodies: &'a [Body],
     static_bodies: &'a [StaticBody],
 }
@@ -153,28 +182,37 @@ impl Iterator for Contacts<'_> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let active = self.active.next()?;
-        Some(self.resolve(active))
+        if let Some(active) = self.static_contacts.next() {
+            return Some(self.resolve_static(active));
+        }
+        self.dynamic_contacts
+            .next()
+            .map(|active| self.resolve_dynamic(active))
     }
 
     #[inline(always)]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.active.size_hint()
+        let len = self.len();
+        (len, Some(len))
     }
 }
 
 impl DoubleEndedIterator for Contacts<'_> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
-        let active = self.active.next_back()?;
-        Some(self.resolve(active))
+        if let Some(active) = self.dynamic_contacts.next_back() {
+            return Some(self.resolve_dynamic(active));
+        }
+        self.static_contacts
+            .next_back()
+            .map(|active| self.resolve_static(active))
     }
 }
 
 impl ExactSizeIterator for Contacts<'_> {
     #[inline(always)]
     fn len(&self) -> usize {
-        self.active.len()
+        self.static_contacts.len() + self.dynamic_contacts.len()
     }
 }
 
@@ -196,11 +234,17 @@ impl fmt::Debug for Contacts<'_> {
 
 impl<'a> Contacts<'a> {
     #[inline(always)]
-    fn resolve(&self, active: &ActiveContact) -> Contact {
-        let body_b = match active.body_b {
-            ContactBodyIndex::Dynamic(index) => self.bodies[index].id(),
-            ContactBodyIndex::Static(index) => self.static_bodies[index].id(),
-        };
+    fn resolve_static(&self, active: &ActiveContactStatic) -> Contact {
+        self.resolve(&active.data, self.static_bodies[active.body_b].id())
+    }
+
+    #[inline(always)]
+    fn resolve_dynamic(&self, active: &ActiveContactDynamic) -> Contact {
+        self.resolve(&active.data, self.bodies[active.body_b].id())
+    }
+
+    #[inline(always)]
+    fn resolve(&self, active: &ActiveContactData, body_b: BodyId) -> Contact {
         Contact {
             body_a: self.bodies[active.body_a].id(),
             body_b,
@@ -219,7 +263,8 @@ impl World {
             settings,
             bodies: Vec::new(),
             static_bodies: Vec::new(),
-            active_contacts: Vec::new(),
+            active_static_contacts: Vec::new(),
+            active_dynamic_contacts: Vec::new(),
             mouse_joints: Vec::new(),
             distance_joints: Vec::new(),
             rope_joints: Vec::new(),
@@ -246,7 +291,8 @@ impl World {
     #[inline]
     pub fn contacts(&self) -> Contacts<'_> {
         Contacts {
-            active: self.active_contacts.iter(),
+            static_contacts: self.active_static_contacts.iter(),
+            dynamic_contacts: self.active_dynamic_contacts.iter(),
             bodies: &self.bodies,
             static_bodies: &self.static_bodies,
         }
@@ -508,7 +554,8 @@ impl World {
     }
 
     fn clear_contacts(&mut self) {
-        self.active_contacts.clear();
+        self.active_static_contacts.clear();
+        self.active_dynamic_contacts.clear();
         self.hot_contacts.fill(HotContacts::EMPTY);
     }
 
@@ -632,7 +679,8 @@ mod tests {
 
     #[test]
     fn active_contact_storage_remains_compact() {
-        assert_eq!(core::mem::size_of::<ActiveContact>(), 48);
+        assert_eq!(core::mem::size_of::<ActiveContactStatic>(), 40);
+        assert_eq!(core::mem::size_of::<ActiveContactDynamic>(), 40);
     }
 
     #[test]
@@ -681,6 +729,26 @@ mod tests {
 
         world.add_body(circle_body(1)).unwrap();
         assert_eq!(world.contacts().len(), 0);
+    }
+
+    #[test]
+    fn public_contacts_chain_static_and_dynamic_storage() {
+        let mut world = world();
+        world.add_body(circle_body(9)).unwrap();
+        world.add_body(circle_body(2)).unwrap();
+        world.add_static_body(static_circle(100, 0.0)).unwrap();
+
+        assert_eq!(world.step().contacts, 3);
+        let mut contacts = world.contacts();
+        assert_eq!(contacts.len(), 3);
+        assert_eq!(contacts.next().unwrap().body_b, BodyId::new(100));
+        assert_eq!(contacts.next().unwrap().body_b, BodyId::new(100));
+        let dynamic = contacts.next_back().unwrap();
+        assert_eq!(
+            (dynamic.body_a, dynamic.body_b),
+            (BodyId::new(2), BodyId::new(9))
+        );
+        assert!(contacts.next().is_none());
     }
 
     #[test]

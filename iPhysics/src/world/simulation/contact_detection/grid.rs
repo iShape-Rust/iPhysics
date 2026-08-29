@@ -137,7 +137,7 @@ impl Detector<'_> {
 mod tests {
     use super::*;
     use crate::quantity::Position;
-    use crate::world::ContactBodyIndex;
+    use crate::world::simulation::contact_detection::ProxyBodyIndex;
 
     #[test]
     fn full_geometry_span_fits_i32_column_math() {
@@ -146,11 +146,11 @@ mod tests {
         let proxies = [
             AabbProxy {
                 aabb: Aabb::from_raw_unchecked(min, min, 0, 0),
-                body: ContactBodyIndex::Dynamic(0),
+                body: ProxyBodyIndex::Dynamic(0),
             },
             AabbProxy {
                 aabb: Aabb::from_raw_unchecked(max, max, 0, 0),
-                body: ContactBodyIndex::Dynamic(1),
+                body: ProxyBodyIndex::Dynamic(1),
             },
         ];
 

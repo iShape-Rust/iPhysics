@@ -5,8 +5,11 @@ use super::StepStats;
 use crate::body::{Body, StaticBody};
 use crate::collision::CollisionSolver;
 use crate::geometry::Aabb;
-use crate::world::{ActiveContact, BroadPhase, ContactBodyIndex, World};
+use crate::world::{
+    ActiveContactData, ActiveContactDynamic, ActiveContactStatic, BroadPhase, World,
+};
 use alloc::vec::Vec;
+use core::ops::Deref;
 use i_key_sort::sort::two_keys_cmp::TwoKeysAndCmpSort;
 
 const AUTO_BRUTE_FORCE_LIMIT: usize = 64;
@@ -14,14 +17,21 @@ const AUTO_BRUTE_FORCE_LIMIT: usize = 64;
 #[derive(Debug, Clone, Copy)]
 struct AabbProxy {
     aabb: Aabb,
-    body: ContactBodyIndex,
+    body: ProxyBodyIndex,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProxyBodyIndex {
+    Dynamic(usize),
+    Static(usize),
 }
 
 #[derive(Debug, Clone, Default)]
 pub(in crate::world) struct BroadPhaseScratch {
     proxies: Vec<AabbProxy>,
     grid: grid::Scratch,
-    contact_sort_buffer: Vec<ActiveContact>,
+    static_contact_sort_buffer: Vec<ActiveContactStatic>,
+    dynamic_contact_sort_buffer: Vec<ActiveContactDynamic>,
 }
 
 impl BroadPhaseScratch {
@@ -29,27 +39,31 @@ impl BroadPhaseScratch {
         Self {
             proxies: Vec::new(),
             grid: grid::Scratch::new(),
-            contact_sort_buffer: Vec::new(),
+            static_contact_sort_buffer: Vec::new(),
+            dynamic_contact_sort_buffer: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
         self.proxies.clear();
         self.grid.clear();
-        self.contact_sort_buffer.clear();
+        self.static_contact_sort_buffer.clear();
+        self.dynamic_contact_sort_buffer.clear();
     }
 }
 
 impl World {
     pub(super) fn build_contacts(&mut self) -> StepStats {
-        self.active_contacts.clear();
+        self.active_static_contacts.clear();
+        self.active_dynamic_contacts.clear();
 
         let scratch = &mut self.broad_phase_scratch;
         build_proxies(&self.bodies, &self.static_bodies, &mut scratch.proxies);
         let detector = Detector {
             bodies: &self.bodies,
             static_bodies: &self.static_bodies,
-            active_contacts: &mut self.active_contacts,
+            active_static_contacts: &mut self.active_static_contacts,
+            active_dynamic_contacts: &mut self.active_dynamic_contacts,
             proxies: &scratch.proxies,
             stats: StepStats::default(),
             collision_solver: CollisionSolver::new(),
@@ -58,7 +72,8 @@ impl World {
         let stats = detector.detect(
             self.settings.broad_phase,
             &mut scratch.grid,
-            &mut scratch.contact_sort_buffer,
+            &mut scratch.static_contact_sort_buffer,
+            &mut scratch.dynamic_contact_sort_buffer,
         );
         scratch.clear();
         stats
@@ -68,7 +83,8 @@ impl World {
 struct Detector<'a> {
     bodies: &'a [Body],
     static_bodies: &'a [StaticBody],
-    active_contacts: &'a mut Vec<ActiveContact>,
+    active_static_contacts: &'a mut Vec<ActiveContactStatic>,
+    active_dynamic_contacts: &'a mut Vec<ActiveContactDynamic>,
     proxies: &'a [AabbProxy],
     stats: StepStats,
     collision_solver: CollisionSolver,
@@ -80,13 +96,13 @@ fn build_proxies(bodies: &[Body], static_bodies: &[StaticBody], proxies: &mut Ve
     for (index, body) in bodies.iter().enumerate() {
         proxies.push(AabbProxy {
             aabb: body.collider().aabb(body.state().transform()),
-            body: ContactBodyIndex::Dynamic(index),
+            body: ProxyBodyIndex::Dynamic(index),
         });
     }
     for (index, body) in static_bodies.iter().enumerate() {
         proxies.push(AabbProxy {
             aabb: body.aabb(),
-            body: ContactBodyIndex::Static(index),
+            body: ProxyBodyIndex::Static(index),
         });
     }
 }
@@ -96,7 +112,8 @@ impl Detector<'_> {
         mut self,
         broad_phase: BroadPhase,
         grid_scratch: &mut grid::Scratch,
-        contact_sort_buffer: &mut Vec<ActiveContact>,
+        static_contact_sort_buffer: &mut Vec<ActiveContactStatic>,
+        dynamic_contact_sort_buffer: &mut Vec<ActiveContactDynamic>,
     ) -> StepStats {
         match broad_phase {
             BroadPhase::BruteForce => self.detect_brute_force(),
@@ -107,14 +124,16 @@ impl Detector<'_> {
             BroadPhase::Auto(settings) => self.detect_grid(grid_scratch, settings),
         }
 
-        sort_top_down(self.active_contacts, contact_sort_buffer);
-        self.stats.contacts = self.active_contacts.len();
+        sort_top_down(self.active_static_contacts, static_contact_sort_buffer);
+        sort_top_down(self.active_dynamic_contacts, dynamic_contact_sort_buffer);
+        self.stats.contacts =
+            self.active_static_contacts.len() + self.active_dynamic_contacts.len();
         self.stats
     }
 
     fn detect_pair(&mut self, a: AabbProxy, b: AabbProxy) {
         match (a.body, b.body) {
-            (ContactBodyIndex::Dynamic(index_a), ContactBodyIndex::Dynamic(index_b)) => {
+            (ProxyBodyIndex::Dynamic(index_a), ProxyBodyIndex::Dynamic(index_b)) => {
                 let (index_a, index_b, aabb_a, aabb_b) = if index_a < index_b {
                     (index_a, index_b, a.aabb, b.aabb)
                 } else {
@@ -131,7 +150,7 @@ impl Detector<'_> {
                     return;
                 }
                 self.stats.aabb_pairs += 1;
-                let active_contacts = &mut self.active_contacts;
+                let active_contacts = &mut self.active_dynamic_contacts;
                 self.collision_solver.collide(
                     body_a.id(),
                     body_a.collider(),
@@ -141,25 +160,27 @@ impl Detector<'_> {
                     body_b.state().transform(),
                     |manifold| {
                         for (point_index, contact) in manifold.into_contacts().enumerate() {
-                            active_contacts.push(ActiveContact {
-                                body_a: index_a,
-                                body_b: ContactBodyIndex::Dynamic(index_b),
-                                point: contact.point,
-                                normal: contact.normal,
-                                penetration: contact.penetration,
-                                key: contact.key.with_correct_position(point_index == 0),
+                            active_contacts.push(ActiveContactDynamic {
+                                body_b: index_b,
+                                data: ActiveContactData {
+                                    body_a: index_a,
+                                    point: contact.point,
+                                    normal: contact.normal,
+                                    penetration: contact.penetration,
+                                    key: contact.key.with_correct_position(point_index == 0),
+                                },
                             });
                         }
                     },
                 );
             }
-            (ContactBodyIndex::Dynamic(index), ContactBodyIndex::Static(static_index)) => {
+            (ProxyBodyIndex::Dynamic(index), ProxyBodyIndex::Static(static_index)) => {
                 self.detect_dynamic_static(index, static_index, a.aabb, b.aabb);
             }
-            (ContactBodyIndex::Static(static_index), ContactBodyIndex::Dynamic(index)) => {
+            (ProxyBodyIndex::Static(static_index), ProxyBodyIndex::Dynamic(index)) => {
                 self.detect_dynamic_static(index, static_index, b.aabb, a.aabb);
             }
-            (ContactBodyIndex::Static(_), ContactBodyIndex::Static(_)) => {}
+            (ProxyBodyIndex::Static(_), ProxyBodyIndex::Static(_)) => {}
         }
     }
 
@@ -182,7 +203,7 @@ impl Detector<'_> {
         self.stats.aabb_pairs += 1;
 
         let static_body = &self.static_bodies[static_index];
-        let active_contacts = &mut self.active_contacts;
+        let active_contacts = &mut self.active_static_contacts;
         self.collision_solver.collide(
             body.id(),
             body.collider(),
@@ -192,13 +213,15 @@ impl Detector<'_> {
             static_body.transform(),
             |manifold| {
                 for (point_index, contact) in manifold.into_contacts().enumerate() {
-                    active_contacts.push(ActiveContact {
-                        body_a: index,
-                        body_b: ContactBodyIndex::Static(static_index),
-                        point: contact.point,
-                        normal: contact.normal,
-                        penetration: contact.penetration,
-                        key: contact.key.with_correct_position(point_index == 0),
+                    active_contacts.push(ActiveContactStatic {
+                        body_b: static_index,
+                        data: ActiveContactData {
+                            body_a: index,
+                            point: contact.point,
+                            normal: contact.normal,
+                            penetration: contact.penetration,
+                            key: contact.key.with_correct_position(point_index == 0),
+                        },
                     });
                 }
             },
@@ -206,7 +229,10 @@ impl Detector<'_> {
     }
 }
 
-fn sort_top_down(active_contacts: &mut [ActiveContact], buffer: &mut Vec<ActiveContact>) {
+fn sort_top_down<T>(active_contacts: &mut [T], buffer: &mut Vec<T>)
+where
+    T: Copy + Deref<Target = ActiveContactData>,
+{
     active_contacts.sort_by_two_keys_then_by_and_buffer(
         false,
         buffer,
@@ -257,11 +283,22 @@ mod tests {
     }
 
     impl World {
-        fn contacts_with(&self, broad_phase: BroadPhase) -> (Vec<ActiveContact>, StepStats) {
+        fn contacts_with(
+            &self,
+            broad_phase: BroadPhase,
+        ) -> (
+            Vec<ActiveContactStatic>,
+            Vec<ActiveContactDynamic>,
+            StepStats,
+        ) {
             let mut world = self.clone();
             world.settings.broad_phase = broad_phase;
             let stats = world.build_contacts();
-            (world.active_contacts, stats)
+            (
+                world.active_static_contacts,
+                world.active_dynamic_contacts,
+                stats,
+            )
         }
     }
 
@@ -275,25 +312,27 @@ mod tests {
             (3, -1.0, 2.0),
             (4, -1.0, 2.0),
         ] {
-            world.active_contacts.push(ActiveContact {
-                body_a: pair_index as usize,
-                body_b: ContactBodyIndex::Static(0),
-                point: Position::from_meters(x, y).unwrap().into(),
-                normal: UnitVector::X,
-                penetration: Length::ZERO,
-                key: crate::collision::ContactKey::new(
-                    crate::collision::ColliderFeature::Circle,
-                    crate::collision::ColliderFeature::Circle,
-                )
-                .with_correct_position(true),
+            world.active_static_contacts.push(ActiveContactStatic {
+                body_b: 0,
+                data: ActiveContactData {
+                    body_a: pair_index as usize,
+                    point: Position::from_meters(x, y).unwrap().into(),
+                    normal: UnitVector::X,
+                    penetration: Length::ZERO,
+                    key: crate::collision::ContactKey::new(
+                        crate::collision::ColliderFeature::Circle,
+                        crate::collision::ColliderFeature::Circle,
+                    )
+                    .with_correct_position(true),
+                },
             });
         }
 
         let mut buffer = Vec::new();
-        sort_top_down(&mut world.active_contacts, &mut buffer);
+        sort_top_down(&mut world.active_static_contacts, &mut buffer);
 
         let body_indices = world
-            .active_contacts
+            .active_static_contacts
             .iter()
             .map(|contact| contact.body_a)
             .collect::<alloc::vec::Vec<_>>();
@@ -323,9 +362,10 @@ mod tests {
         let grid = world.contacts_with(BroadPhase::Grid(GridBroadPhase::new(0).unwrap()));
 
         assert_eq!(grid.0, brute.0);
-        assert_eq!(grid.1.aabb_pairs, brute.1.aabb_pairs);
-        assert_eq!(grid.1.contacts, brute.1.contacts);
-        assert!(grid.1.tested_pairs < brute.1.tested_pairs);
+        assert_eq!(grid.1, brute.1);
+        assert_eq!(grid.2.aabb_pairs, brute.2.aabb_pairs);
+        assert_eq!(grid.2.contacts, brute.2.contacts);
+        assert!(grid.2.tested_pairs < brute.2.tested_pairs);
     }
 
     #[test]
@@ -448,8 +488,9 @@ mod tests {
                 let grid =
                     world.contacts_with(BroadPhase::Grid(GridBroadPhase::new(power).unwrap()));
                 assert_eq!(grid.0, brute.0);
-                assert_eq!(grid.1.aabb_pairs, brute.1.aabb_pairs);
-                assert_eq!(grid.1.contacts, brute.1.contacts);
+                assert_eq!(grid.1, brute.1);
+                assert_eq!(grid.2.aabb_pairs, brute.2.aabb_pairs);
+                assert_eq!(grid.2.contacts, brute.2.contacts);
             }
         }
     }
