@@ -13,7 +13,7 @@ use core::ops::Range;
 use i_key_sort::sort::one_key::OneKeySort;
 use i_key_sort::sort::two_keys::TwoKeysSort;
 
-const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
+const POSITION_SLOP_RAW: u32 = 512;
 const MAX_POSITION_CORRECTION_RAW: u32 = 256;
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 const MAX_CONTACT_VISITS_PER_STEP: u64 = 2 * (u8::MAX as u64 + 1);
