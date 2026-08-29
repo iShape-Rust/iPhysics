@@ -5,6 +5,7 @@ mod joint_solver;
 mod sleep;
 
 pub(in crate::world) use contact_detection::BroadPhaseScratch;
+pub(in crate::world) use contact_solver::ContactSolverScratch;
 
 use super::World;
 use alloc::vec;
@@ -44,6 +45,7 @@ impl World {
         }
         self.solve_final_static_velocities(&mut contact_constraints);
         self.rebuild_contact_cache(&contact_constraints);
+        self.clear_contact_solver_scratch();
         self.correct_positions();
         self.integrate_transforms();
         self.update_sleep_states(&mut stats);

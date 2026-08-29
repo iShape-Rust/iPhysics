@@ -1,7 +1,7 @@
 use crate::body::SleepConfig;
 use crate::quantity::{Damping, LinearAcceleration};
 
-const DEFAULT_DAMPING_RAW: u32 = 66;
+const DEFAULT_DAMPING_RAW: u32 = 32;
 const DEFAULT_COLUMN_WIDTH_POWER: u8 = 5;
 
 /// Fixed-width X-axis grid used by the broad phase.
@@ -85,7 +85,7 @@ impl WorldSettings {
                 Some(value) => value,
                 None => unreachable!(),
             },
-            velocity_iterations: 6,
+            velocity_iterations: 50,
             sleep: SleepConfig::FAST_EFFECTS,
         }
     }

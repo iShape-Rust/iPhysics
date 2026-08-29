@@ -15,8 +15,8 @@ use contact_cache::HotContacts;
 use core::{fmt, iter::FusedIterator, ops::Deref, slice};
 
 pub use settings::{BroadPhase, GridBroadPhase, WorldSettings};
-use simulation::BroadPhaseScratch;
 pub use simulation::StepStats;
+use simulation::{BroadPhaseScratch, ContactSolverScratch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddBodyError {
@@ -119,6 +119,7 @@ pub struct World {
     distance_joints: Vec<DistanceJoint>,
     rope_joints: Vec<RopeJoint>,
     broad_phase_scratch: BroadPhaseScratch,
+    contact_solver_scratch: ContactSolverScratch,
     hot_contacts: Vec<HotContacts>,
 }
 
@@ -269,6 +270,7 @@ impl World {
             distance_joints: Vec::new(),
             rope_joints: Vec::new(),
             broad_phase_scratch: BroadPhaseScratch::new(),
+            contact_solver_scratch: ContactSolverScratch::new(),
             hot_contacts: Vec::new(),
         }
     }

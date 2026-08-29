@@ -8,22 +8,89 @@ use crate::world::{ActiveContactData, ActiveContactDynamic, ActiveContactStatic,
 use crate::{AngularVelocity, UnitVector};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem;
+use core::ops::Range;
+use i_key_sort::sort::one_key::OneKeySort;
+use i_key_sort::sort::two_keys::TwoKeysSort;
 
 const POSITION_SLOP_RAW: u32 = 128; // 1/512 m
 const MAX_POSITION_CORRECTION_RAW: u32 = 256;
 const MAX_VELOCITY_CHANGE_RAW: u64 = 2 * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
-const MAX_ACCUMULATED_NORMAL_RAW: u64 = (u8::MAX as u64 + 1) * MAX_VELOCITY_CHANGE_RAW;
+const MAX_CONTACT_VISITS_PER_STEP: u64 = 2 * (u8::MAX as u64 + 1);
+const MAX_ACCUMULATED_NORMAL_RAW: u64 = MAX_CONTACT_VISITS_PER_STEP * MAX_VELOCITY_CHANGE_RAW;
 const ANGULAR_RESPONSE_FRACTION_BITS: u32 = 17;
 const MAX_ANGULAR_RESPONSE_Q17: u64 = AngularVelocity::MAX_CHANGE << ANGULAR_RESPONSE_FRACTION_BITS;
 const LINEAR_RESPONSE_FRACTION_BITS: u32 = 31;
 const ONE_LINEAR_RESPONSE_Q31: u64 = 1 << LINEAR_RESPONSE_FRACTION_BITS;
 const FRICTION_RESPONSE_FRACTION_BITS: u32 = 31;
-// One contact can be visited at most 255 times per step, and each visit can
-// change its tangent accumulator by at most one bounded relative speed.
+// An anchored contact is visited in both directions of every solver iteration.
+// Each visit can change its tangent accumulator by at most one bounded speed.
 const MAX_TANGENT_ACCUMULATOR_RAW: u64 =
-    (u8::MAX as u64 + 1) * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
+    MAX_CONTACT_VISITS_PER_STEP * MAX_RELATIVE_CONTACT_SPEED_RAW as u64;
 const MAX_FRICTION_RESPONSE_Q31: u64 =
     MAX_TANGENT_ACCUMULATOR_RAW << FRICTION_RESPONSE_FRACTION_BITS;
+const UNREACHED_CONTACT_ORDER: u32 = u32::MAX;
+
+#[derive(Debug, Clone, Copy)]
+struct BodyContactHandler {
+    body_index: u32,
+    other_index: u32,
+    order: u32,
+    contact_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrderedContact {
+    order: u32,
+    contact_index: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(in crate::world) struct ContactSolverScratch {
+    handlers: Vec<BodyContactHandler>,
+    handler_sort_buffer: Vec<BodyContactHandler>,
+    wave_bodies: Vec<u32>,
+    next_wave_bodies: Vec<u32>,
+    body_sort_buffer: Vec<u32>,
+    contact_orders: Vec<u32>,
+    anchored_contacts: Vec<OrderedContact>,
+    anchored_sort_buffer: Vec<OrderedContact>,
+    free_contacts: Vec<usize>,
+}
+
+impl ContactSolverScratch {
+    pub(in crate::world) const fn new() -> Self {
+        Self {
+            handlers: Vec::new(),
+            handler_sort_buffer: Vec::new(),
+            wave_bodies: Vec::new(),
+            next_wave_bodies: Vec::new(),
+            body_sort_buffer: Vec::new(),
+            contact_orders: Vec::new(),
+            anchored_contacts: Vec::new(),
+            anchored_sort_buffer: Vec::new(),
+            free_contacts: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.handlers.clear();
+        self.handler_sort_buffer.clear();
+        self.wave_bodies.clear();
+        self.next_wave_bodies.clear();
+        self.body_sort_buffer.clear();
+        self.contact_orders.clear();
+        self.anchored_contacts.clear();
+        self.anchored_sort_buffer.clear();
+        self.free_contacts.clear();
+    }
+}
+
+fn body_handler_range(handlers: &[BodyContactHandler], body_index: u32) -> Range<usize> {
+    let start = handlers.partition_point(|handler| handler.body_index < body_index);
+    let end = handlers.partition_point(|handler| handler.body_index <= body_index);
+    start..end
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct AxisConstraint {
@@ -56,7 +123,9 @@ pub(super) struct ContactConstraints {
 }
 
 impl World {
-    pub(super) fn prepare_constraints(&self) -> ContactConstraints {
+    pub(super) fn prepare_constraints(&mut self) -> ContactConstraints {
+        self.prepare_contact_solve_order();
+
         let static_contacts = self
             .active_static_contacts
             .iter()
@@ -83,6 +152,117 @@ impl World {
             static_contacts,
             dynamic_contacts,
         }
+    }
+
+    fn prepare_contact_solve_order(&mut self) {
+        let scratch = &mut self.contact_solver_scratch;
+        scratch.clear();
+
+        if self.active_static_contacts.is_empty() {
+            scratch
+                .free_contacts
+                .extend(0..self.active_dynamic_contacts.len());
+            return;
+        }
+        if self.active_dynamic_contacts.is_empty() {
+            return;
+        }
+
+        scratch
+            .wave_bodies
+            .extend(self.active_static_contacts.iter().map(|contact| {
+                u32::try_from(contact.body_a).expect("dynamic body index must fit u32")
+            }));
+        scratch.wave_bodies.sort_by_one_key_and_buffer(
+            false,
+            &mut scratch.body_sort_buffer,
+            |&body_index| body_index,
+        );
+        scratch.wave_bodies.dedup();
+
+        scratch
+            .handlers
+            .reserve(self.active_dynamic_contacts.len().saturating_mul(2));
+        for (contact_index, contact) in self.active_dynamic_contacts.iter().enumerate() {
+            let body_a = u32::try_from(contact.body_a).expect("dynamic body index must fit u32");
+            let body_b = u32::try_from(contact.body_b).expect("dynamic body index must fit u32");
+            scratch.handlers.push(BodyContactHandler {
+                body_index: body_a,
+                other_index: body_b,
+                order: UNREACHED_CONTACT_ORDER,
+                contact_index,
+            });
+            scratch.handlers.push(BodyContactHandler {
+                body_index: body_b,
+                other_index: body_a,
+                order: UNREACHED_CONTACT_ORDER,
+                contact_index,
+            });
+        }
+        scratch.handlers.sort_by_one_key_and_buffer(
+            false,
+            &mut scratch.handler_sort_buffer,
+            |handler| handler.body_index,
+        );
+        scratch
+            .contact_orders
+            .resize(self.active_dynamic_contacts.len(), UNREACHED_CONTACT_ORDER);
+
+        let mut order = 0_u32;
+        while !scratch.wave_bodies.is_empty() {
+            let mut previous_body_index = None;
+            for wave_index in 0..scratch.wave_bodies.len() {
+                let body_index = scratch.wave_bodies[wave_index];
+                if previous_body_index == Some(body_index) {
+                    continue;
+                }
+                previous_body_index = Some(body_index);
+
+                let range = body_handler_range(&scratch.handlers, body_index);
+                for handler_index in range {
+                    let handler = &mut scratch.handlers[handler_index];
+                    if handler.order != UNREACHED_CONTACT_ORDER {
+                        continue;
+                    }
+
+                    handler.order = order;
+                    let contact_order = &mut scratch.contact_orders[handler.contact_index];
+                    *contact_order = (*contact_order).min(order);
+                    scratch.next_wave_bodies.push(handler.other_index);
+                }
+            }
+
+            scratch.body_sort_buffer.clear();
+            scratch.next_wave_bodies.sort_by_one_key_and_buffer(
+                false,
+                &mut scratch.body_sort_buffer,
+                |&body_index| body_index,
+            );
+            mem::swap(&mut scratch.wave_bodies, &mut scratch.next_wave_bodies);
+            scratch.next_wave_bodies.clear();
+            order = order + 1;
+        }
+
+        for (contact_index, &order) in scratch.contact_orders.iter().enumerate() {
+            if order == UNREACHED_CONTACT_ORDER {
+                scratch.free_contacts.push(contact_index);
+            } else {
+                scratch.anchored_contacts.push(OrderedContact {
+                    order,
+                    contact_index,
+                });
+            }
+        }
+        scratch.anchored_contacts.sort_by_two_keys_and_buffer(
+            false,
+            &mut scratch.anchored_sort_buffer,
+            |contact| contact.order,
+            |contact| contact.contact_index,
+        );
+    }
+
+    pub(super) fn clear_contact_solver_scratch(&mut self) {
+        self.contact_solver_scratch.clear();
     }
 
     fn prepare_contact_constraint(
@@ -167,9 +347,19 @@ impl World {
             self.initialize_restitution_targets(constraints);
         }
 
+        for position in 0..self.contact_solver_scratch.free_contacts.len() {
+            let index = self.contact_solver_scratch.free_contacts[position];
+            self.solve_dynamic_velocity(index, &mut constraints.dynamic_contacts[index]);
+        }
+
+        for position in (0..self.contact_solver_scratch.anchored_contacts.len()).rev() {
+            let index = self.contact_solver_scratch.anchored_contacts[position].contact_index;
+            self.solve_dynamic_velocity(index, &mut constraints.dynamic_contacts[index]);
+        }
         self.solve_static_velocities(&mut constraints.static_contacts);
-        for (index, constraint) in constraints.dynamic_contacts.iter_mut().enumerate() {
-            self.solve_dynamic_velocity(index, constraint);
+        for position in 0..self.contact_solver_scratch.anchored_contacts.len() {
+            let index = self.contact_solver_scratch.anchored_contacts[position].contact_index;
+            self.solve_dynamic_velocity(index, &mut constraints.dynamic_contacts[index]);
         }
     }
 
@@ -752,6 +942,55 @@ mod tests {
             body_b,
             data: active_contact_data(body_a, point, normal),
         }
+    }
+
+    #[test]
+    fn contact_order_reaches_only_bodies_connected_to_static_contacts() {
+        let mut world = zero_gravity_world();
+        for id in 1..=5 {
+            world
+                .add_body(circle_body(id, id as f64, 0.0, Material::INELASTIC))
+                .unwrap();
+        }
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(100),
+                Transform::IDENTITY,
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+
+        let static_contact = active_static_contact(2, 0, GeometryPoint::ZERO, UnitVector::X);
+        world.active_static_contacts.push(static_contact);
+        world.active_static_contacts.push(static_contact);
+        world.active_dynamic_contacts.extend([
+            active_dynamic_contact(0, 1, GeometryPoint::ZERO, UnitVector::X),
+            active_dynamic_contact(1, 2, GeometryPoint::ZERO, UnitVector::X),
+            active_dynamic_contact(3, 4, GeometryPoint::ZERO, UnitVector::X),
+        ]);
+
+        let _ = world.prepare_constraints();
+
+        assert_eq!(
+            world.contact_solver_scratch.contact_orders,
+            [1, 0, u32::MAX]
+        );
+        let anchored = world
+            .contact_solver_scratch
+            .anchored_contacts
+            .iter()
+            .map(|contact| (contact.order, contact.contact_index))
+            .collect::<Vec<_>>();
+        assert_eq!(anchored, [(0, 1), (1, 0)]);
+        assert_eq!(world.contact_solver_scratch.free_contacts, [2]);
+        assert!(
+            world
+                .contact_solver_scratch
+                .handlers
+                .windows(2)
+                .all(|pair| pair[0].body_index <= pair[1].body_index)
+        );
     }
 
     #[test]

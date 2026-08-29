@@ -81,7 +81,7 @@ impl Scenario {
             Self::OffCenterImpact => "Off-center impact",
             Self::BoxStack => "Box stack stability",
             Self::BoxPyramid => "Box pyramid (base 7)",
-            Self::DominoPyramid => "Domino pyramid (base 20)",
+            Self::DominoPyramid => "Domino pyramid (base 10)",
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
@@ -115,7 +115,7 @@ impl Scenario {
             Self::BoxStack => "Six slightly rotated boxes test resting-contact stability.",
             Self::BoxPyramid => "Twenty-eight squares form a seven-row pyramid on a flat floor.",
             Self::DominoPyramid => {
-                "Pi-shaped domino arches form a twenty-row pyramid with twenty arches at the base."
+                "Pi-shaped domino arches form a ten-row pyramid with ten arches at the base."
             }
             Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
             Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
@@ -1304,7 +1304,7 @@ fn block_pyramid_world(
 }
 
 fn domino_pyramid_world() -> World {
-    const BASE_COUNT: usize = 20;
+    const BASE_COUNT: usize = 10;
     const DOMINO_LENGTH: f64 = 1.0;
     const DOMINO_THICKNESS: f64 = 0.1875;
     const FLOOR_TOP: f64 = -1.0;
@@ -2019,8 +2019,8 @@ mod tests {
     }
 
     #[test]
-    fn domino_pyramid_has_twenty_arches_at_its_base() {
-        const BASE_COUNT: usize = 20;
+    fn domino_pyramid_has_ten_arches_at_its_base() {
+        const BASE_COUNT: usize = 10;
 
         let world = build_world(Scenario::DominoPyramid);
         let material = Material::new(0.0, 0.8).unwrap();
