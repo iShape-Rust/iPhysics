@@ -4,7 +4,6 @@
 //! share the same storage format. This prevents, for example, accidentally
 //! adding acceleration directly to position.
 
-mod angle;
 mod angular_acceleration;
 mod angular_velocity;
 mod damping;
@@ -17,11 +16,11 @@ mod mass;
 mod position;
 
 pub(crate) use crate::geometry::vec::RawVec2;
-pub use angle::{Angle, AngleDelta};
 pub use angular_acceleration::AngularAcceleration;
 pub use angular_velocity::AngularVelocity;
 pub use damping::Damping;
 pub use force::Force;
+pub use i_float::int::angle::{Angle, AngleDelta};
 pub use integration::{integrate, integrate_angular};
 pub use length::Length;
 pub use linear_acceleration::LinearAcceleration;

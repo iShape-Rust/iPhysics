@@ -83,23 +83,30 @@ separate gameplay invariant rather than a side effect of component clamping.
 
 ### Angular motion
 
-**Orientation [`Angle`](iPhysics/src/quantity/angle.rs)** — one `u32` binary
-angle covering a complete wrapping turn.
+**Orientation `Angle`** — one `u32` binary angle covering a complete wrapping
+turn, re-exported from `i_float::int::angle`.
 
 - Resolution: `2π / 2^32`, or approximately `1.46292e-9 rad`
   (`8.38e-8°`).
 - Quarter, half, and full turns are exact powers of two.
 
 Overflow performs exact angle normalization. Sine and cosine are calculated
-with deterministic, non-expanding integer Q30 CORDIC.
+with iFloat's deterministic, non-expanding integer Q30 CORDIC. Point rotations
+retain rounding to the nearest coordinate unit, with ties away from zero.
 
-**Signed angle difference `AngleDelta`** — one `i32` binary angle.
+**Signed angle difference `AngleDelta`** — one `i32` binary angle, also
+re-exported from iFloat.
 
 - Resolution: the same as `Angle`.
 - Range: `-π..π` with an exclusive upper bound.
 
 Interpreting an angle subtraction as `i32` directly produces the shortest
 wrapped difference.
+
+Use `Angle::from_bits` / `bits` for binary storage and
+`to_radians::<f64>()` or `to_radians::<f32>()` for output. To advance an angle
+by one physics tick, use `angle.wrapping_add(velocity.angle_delta_per_tick())`;
+`integrate_angular` and `Transform::advance` perform this operation internally.
 
 **[`AngularVelocity`](iPhysics/src/quantity/angular_velocity.rs)** — one `i32`
 in Q16.

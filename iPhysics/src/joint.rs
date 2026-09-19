@@ -87,7 +87,7 @@ pub(super) fn inverse_transform_point(transform: Transform, world: Position) -> 
     let [center_x, center_y] = transform.position.raw();
     let dx = world_x as i64 - center_x as i64;
     let dy = world_y as i64 - center_y as i64;
-    let [sin, cos] = transform.angle.sin_cos_q30();
+    let (sin, cos) = transform.angle.sin_cos();
 
     let local_x = (dx * cos as i64 + dy * sin as i64).round_shift(30);
     let local_y = (-dx * sin as i64 + dy * cos as i64).round_shift(30);

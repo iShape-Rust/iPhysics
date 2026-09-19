@@ -1897,9 +1897,9 @@ mod tests {
             body.state().angular_velocity().to_radians_per_second(),
         );
         assert!(
-            (body.state().transform().angle.to_radians() - angle.to_radians()).abs() < 0.01,
+            (body.state().transform().angle.to_radians::<f64>() - angle.to_radians::<f64>()).abs() < 0.01,
             "box rotated away from the plane: {} rad",
-            body.state().transform().angle.to_radians(),
+            body.state().transform().angle.to_radians::<f64>(),
         );
         assert_eq!(first_stats.contacts, 2);
     }

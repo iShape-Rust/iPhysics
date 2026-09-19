@@ -24,6 +24,6 @@ pub fn integrate_angular(
     acceleration: AngularAcceleration,
 ) -> (Angle, AngularVelocity) {
     let velocity = velocity.advance(acceleration);
-    let angle = angle.advance(velocity);
+    let angle = angle.wrapping_add(velocity.angle_delta_per_tick());
     (angle, velocity)
 }

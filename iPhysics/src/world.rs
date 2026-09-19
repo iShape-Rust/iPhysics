@@ -121,6 +121,7 @@ pub struct World {
     broad_phase_scratch: BroadPhaseScratch,
     contact_solver_scratch: ContactSolverScratch,
     hot_contacts: Vec<HotContacts>,
+    sleep_supports: Vec<SleepSupport>,
 }
 
 /// Data shared by static and dynamic solver contacts.
@@ -149,6 +150,12 @@ pub(crate) struct ActiveContactStatic {
 pub(crate) struct ActiveContactDynamic {
     pub(crate) body_b: usize,
     pub(crate) data: ActiveContactData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SleepSupport {
+    pub(crate) dependent: BodyId,
+    pub(crate) support: BodyId,
 }
 
 impl Deref for ActiveContactStatic {
@@ -272,6 +279,7 @@ impl World {
             broad_phase_scratch: BroadPhaseScratch::new(),
             contact_solver_scratch: ContactSolverScratch::new(),
             hot_contacts: Vec::new(),
+            sleep_supports: Vec::new(),
         }
     }
 
@@ -455,6 +463,7 @@ impl World {
         let body = self.bodies.remove(index);
         self.hot_contacts.remove(index);
         self.clear_contacts();
+        self.wake_unsupported_sleeping_bodies();
         Some(body)
     }
 
@@ -552,6 +561,7 @@ impl World {
         self.remove_joints_for_body(id);
         let body = self.static_bodies.remove(index);
         self.clear_contacts();
+        self.wake_unsupported_sleeping_bodies();
         Some(body)
     }
 

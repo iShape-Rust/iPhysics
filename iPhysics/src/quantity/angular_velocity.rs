@@ -1,6 +1,6 @@
 use crate::ops::{quantize::Quantize, shift::RoundShift};
 
-use super::angle::AngleDelta;
+use super::AngleDelta;
 use super::angular_acceleration::AngularAcceleration;
 use super::{
     ANGULAR_ACCELERATION_TO_VELOCITY_SHIFT, ANGULAR_VELOCITY_FRACTION_BITS,

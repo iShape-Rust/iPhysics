@@ -539,7 +539,7 @@ mod tests {
         .unwrap();
         let vertices = convex.transformed_vertices(Transform::new(
             Position::from_i32(world_max, world_max),
-            Angle::from_raw(0x1234_5678),
+            Angle::from_bits(0x1234_5678),
         ));
 
         assert!(vertices.iter().all(|point| {

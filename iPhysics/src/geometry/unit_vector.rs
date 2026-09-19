@@ -131,7 +131,7 @@ impl UnitVector {
     }
 
     pub(crate) fn rotate(self, angle: Angle) -> Self {
-        let [sin, cos] = angle.sin_cos_q30();
+        let (sin, cos) = angle.sin_cos();
         let [px, py] = self.raw();
 
         let x = (px as i64 * cos as i64 - py as i64 * sin as i64).round_shift(30);

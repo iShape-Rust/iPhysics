@@ -98,8 +98,25 @@ fn integration_saturates_at_world_boundary() {
 }
 
 #[test]
+fn q30_sin_cos_uses_conventional_order() {
+    assert_eq!(Angle::ZERO.sin_cos(), (0, 1 << 30));
+    assert_eq!(Angle::QUARTER_TURN.sin_cos(), (1 << 30, 0));
+    assert_eq!(Angle::HALF_TURN.sin_cos(), (0, -(1 << 30)));
+    assert_eq!(Angle::THREE_QUARTER_TURN.sin_cos(), (-(1 << 30), 0));
+}
+
+#[test]
+fn rotation_coefficients_are_non_expanding() {
+    let scale_squared = 1_i64 << 60;
+    for bits in (0..=u32::MAX).step_by(65_537) {
+        let (sin, cos) = Angle::from_bits(bits).sin_cos();
+        assert!(sin as i64 * sin as i64 + cos as i64 * cos as i64 <= scale_squared);
+    }
+}
+
+#[test]
 fn binary_angle_wraps_at_exactly_one_turn() {
-    let angle = Angle::from_raw(u32::MAX).wrapping_add(AngleDelta::from_raw(1));
+    let angle = Angle::from_bits(u32::MAX).wrapping_add(AngleDelta::from_raw(1));
 
     assert_eq!(angle, Angle::ZERO);
     assert_eq!(Angle::ZERO.delta_to(Angle::QUARTER_TURN).raw(), 1 << 30);
@@ -113,7 +130,10 @@ fn angle_radian_conversion_uses_canonical_turn_values() {
 
     assert_eq!(quarter, Angle::QUARTER_TURN);
     assert_eq!(negative_quarter, Angle::THREE_QUARTER_TURN);
-    assert_eq!(Angle::HALF_TURN.to_signed_radians(), -core::f64::consts::PI);
+    assert_eq!(
+        Angle::HALF_TURN.to_signed_radians::<f64>(),
+        -core::f64::consts::PI
+    );
     assert!(Angle::from_radians(f64::INFINITY).is_none());
 }
 
@@ -125,7 +145,7 @@ fn integrates_angular_acceleration_before_angle() {
 
     assert_eq!(velocity.to_radians_per_second(), 1.5625);
     let expected_radians = 1.5625 / 64.0;
-    let error = (angle.to_radians() - expected_radians).abs();
+    let error = (angle.to_radians::<f64>() - expected_radians).abs();
     assert!(error < 2.0e-9, "angle error: {error}");
 }
 

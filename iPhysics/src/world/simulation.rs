@@ -25,6 +25,7 @@ pub struct StepStats {
 
 impl World {
     pub fn step(&mut self) -> StepStats {
+        self.wake_unsupported_sleeping_bodies();
         self.wake_mouse_joints_bodies();
         self.wake_distance_and_rope_joints_bodies();
         self.integrate_velocities();
@@ -54,6 +55,7 @@ impl World {
         self.clear_contact_solver_scratch();
         self.correct_positions();
         self.integrate_transforms();
+        self.wake_unsupported_sleeping_bodies();
         self.update_sleep_states(&mut stats);
 
         stats
@@ -122,6 +124,47 @@ mod tests {
 
     fn zero_gravity_world() -> World {
         World::new(WorldSettings::new(LinearAcceleration::ZERO))
+    }
+
+    fn sleeping_stack_world() -> World {
+        let mut world = World::default();
+        world
+            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
+            .unwrap();
+        world
+            .add_body(Body::dynamic(
+                BodyId::new(2),
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                Mass::ONE,
+                Material::INELASTIC,
+                BodyState::new(
+                    Transform::new(Position::from_meters(0.0, 1.0).unwrap(), Angle::ZERO),
+                    LinearVelocity::ZERO,
+                    AngularVelocity::ZERO,
+                ),
+            ))
+            .unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(3),
+                Transform::new(Position::from_meters(0.0, -100.5).unwrap(), Angle::ZERO),
+                Circle::new(Length::from_meters(100.0).unwrap()).unwrap(),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+
+        for _ in 0..1024 {
+            world.step();
+            if world.bodies().iter().all(|body| body.state().is_sleeping()) {
+                break;
+            }
+        }
+        assert!(world.bodies().iter().all(|body| body.state().is_sleeping()));
+        assert_eq!(world.sleep_supports.len(), 2);
+        world.step();
+        assert!(world.active_static_contacts.is_empty());
+        assert!(world.active_dynamic_contacts.is_empty());
+        world
     }
 
     #[test]
@@ -254,6 +297,77 @@ mod tests {
         for _ in 0..SleepConfig::FAST_EFFECTS.required_ticks() {
             world.step();
         }
+
+        assert!(world.body(BodyId::new(1)).unwrap().state().is_sleeping());
+    }
+
+    #[test]
+    fn removing_support_wakes_only_the_unsupported_body() {
+        let mut world = sleeping_stack_world();
+
+        world.remove_static_body(BodyId::new(3)).unwrap();
+
+        assert!(!world.body(BodyId::new(1)).unwrap().state().is_sleeping());
+        assert!(world.body(BodyId::new(2)).unwrap().state().is_sleeping());
+        world.step();
+        let upper = world.body(BodyId::new(2)).unwrap().state();
+        assert!(!upper.is_sleeping());
+        assert_eq!(upper.linear_velocity(), LinearVelocity::ZERO);
+        world.step();
+        assert!(
+            world
+                .body(BodyId::new(2))
+                .unwrap()
+                .state()
+                .linear_velocity()
+                .raw()[1]
+                < 0
+        );
+    }
+
+    #[test]
+    fn moving_support_wakes_dependent_after_contact_is_lost() {
+        let mut world = sleeping_stack_world();
+
+        world
+            .body_mut(BodyId::new(1))
+            .unwrap()
+            .state_mut()
+            .set_linear_velocity(LinearVelocity::from_meters_per_second(64.0, 0.0).unwrap());
+
+        assert!(!world.body(BodyId::new(1)).unwrap().state().is_sleeping());
+        assert!(world.body(BodyId::new(2)).unwrap().state().is_sleeping());
+        world.step();
+        let upper = world.body(BodyId::new(2)).unwrap().state();
+        assert!(!upper.is_sleeping());
+        assert_eq!(upper.linear_velocity(), LinearVelocity::ZERO);
+        world.step();
+        let upper = world.body(BodyId::new(2)).unwrap().state();
+        assert!(upper.linear_velocity().raw()[1] < 0);
+        assert!(i64::from(upper.transform().position.raw()[1]) < Position::SCALE);
+    }
+
+    #[test]
+    fn removing_support_in_zero_gravity_keeps_body_sleeping() {
+        let mut world = zero_gravity_world();
+        world
+            .add_body(circle_body(1, 0.0, 0.0, Material::INELASTIC))
+            .unwrap();
+        world
+            .add_static_body(StaticBody::new(
+                BodyId::new(2),
+                Transform::new(Position::from_meters(1.0, 0.0).unwrap(), Angle::ZERO),
+                Circle::new(Length::from_meters(0.5).unwrap()).unwrap(),
+                Material::INELASTIC,
+            ))
+            .unwrap();
+        for _ in 0..SleepConfig::FAST_EFFECTS.required_ticks() {
+            world.step();
+        }
+        assert!(world.body(BodyId::new(1)).unwrap().state().is_sleeping());
+        assert!(world.sleep_supports.is_empty());
+
+        world.remove_static_body(BodyId::new(2)).unwrap();
 
         assert!(world.body(BodyId::new(1)).unwrap().state().is_sleeping());
     }

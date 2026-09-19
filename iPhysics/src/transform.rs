@@ -61,7 +61,9 @@ impl Transform {
     ) -> Self {
         Self {
             position: self.position.advance(linear_velocity),
-            angle: self.angle.advance(angular_velocity),
+            angle: self
+                .angle
+                .wrapping_add(angular_velocity.angle_delta_per_tick()),
         }
     }
 }
@@ -88,6 +90,20 @@ mod tests {
         assert_eq!(
             transform.apply(Position::from_i32(30, 10)),
             Position::from_i32(90, 230)
+        );
+    }
+
+    #[test]
+    fn non_cardinal_rotation_rounds_small_coordinates_symmetrically() {
+        let transform = Transform::new(Position::ZERO, Angle::from_bits(1 << 29));
+
+        assert_eq!(
+            transform.apply(Position::from_i32(1, 0)),
+            Position::from_i32(1, 1)
+        );
+        assert_eq!(
+            transform.apply(Position::from_i32(-1, 0)),
+            Position::from_i32(-1, -1)
         );
     }
 

@@ -31,6 +31,7 @@ enum Scenario {
     BoxStackRestitution,
     BoxPyramid,
     DominoPyramid,
+    DominoPyramidHeavyImpact,
     CircleVsConvex,
     ConvexVsConvex,
     CompositePlayground,
@@ -44,7 +45,7 @@ enum Scenario {
 }
 
 impl Scenario {
-    const ALL: [Self; 23] = [
+    const ALL: [Self; 24] = [
         Self::FreeFall,
         Self::ElasticCircles,
         Self::SleepOnSupport,
@@ -58,6 +59,7 @@ impl Scenario {
         Self::BoxStackRestitution,
         Self::BoxPyramid,
         Self::DominoPyramid,
+        Self::DominoPyramidHeavyImpact,
         Self::CircleVsConvex,
         Self::ConvexVsConvex,
         Self::CompositePlayground,
@@ -85,6 +87,7 @@ impl Scenario {
             Self::BoxStackRestitution => "Box stack stability (restitution 0.6)",
             Self::BoxPyramid => "Box pyramid (base 7)",
             Self::DominoPyramid => "Domino pyramid (base 10)",
+            Self::DominoPyramidHeavyImpact => "Domino pyramid: heavy impact",
             Self::CircleVsConvex => "Circle vs convex",
             Self::ConvexVsConvex => "Convex vs convex",
             Self::CompositePlayground => "Composite static playground",
@@ -122,6 +125,9 @@ impl Scenario {
             Self::BoxPyramid => "Twenty-eight squares form a seven-row pyramid on a flat floor.",
             Self::DominoPyramid => {
                 "Pi-shaped domino arches form a ten-row pyramid with ten arches at the base."
+            }
+            Self::DominoPyramidHeavyImpact => {
+                "The same domino pyramid is struck near its center by a 20 kg projectile."
             }
             Self::CircleVsConvex => "A circle and a rotated box collide with zero gravity.",
             Self::ConvexVsConvex => "A triangle and a hexagon exercise convex SAT contacts.",
@@ -863,7 +869,7 @@ fn paint_simple_collider(
             let radius = circle.radius().to_meters() as f32 * camera.zoom;
             painter.circle_filled(center, radius, fill);
             painter.circle_stroke(center, radius, stroke);
-            let angle = transform.angle.to_radians() as f32;
+            let angle = transform.angle.to_radians::<f32>();
             let radius_tip = center + Vec2::new(angle.cos(), -angle.sin()) * radius;
             painter.line_segment([center, radius_tip], stroke);
             painter.circle_filled(center, 2.5, color);
@@ -1146,6 +1152,7 @@ fn build_world(scenario: Scenario) -> World {
         Scenario::BoxStackRestitution => box_stack_world(Material::new(0.6, 0.5).unwrap()),
         Scenario::BoxPyramid => block_pyramid_world(0.32, 0.32, 0.68, 0.68),
         Scenario::DominoPyramid => domino_pyramid_world(),
+        Scenario::DominoPyramidHeavyImpact => domino_pyramid_heavy_impact_world(),
         Scenario::CircleVsConvex => {
             let mut world = zero_gravity_world();
             add(
@@ -1350,6 +1357,33 @@ fn domino_pyramid_world() -> World {
             id += 1;
         }
     }
+    world
+}
+
+fn domino_pyramid_heavy_impact_world() -> World {
+    const PROJECTILE_MASS_KG: f64 = 20.0;
+    const PROJECTILE_RADIUS: f64 = 0.5;
+
+    let mut world = domino_pyramid_world();
+    let projectile_id = world.bodies().len() as u64 + 2;
+    let material = Material::new(0.0, 0.8).unwrap();
+    let collider =
+        Circle::new(Length::from_meters(PROJECTILE_RADIUS).expect("projectile radius must fit"))
+            .expect("projectile radius must be positive");
+    add(
+        &mut world,
+        dynamic_collider_with_mass(
+            projectile_id,
+            -9.0,
+            5.5,
+            Angle::ZERO,
+            collider,
+            8.0,
+            0.0,
+            Mass::from_kilograms(PROJECTILE_MASS_KG).expect("projectile mass must fit"),
+            material,
+        ),
+    );
     world
 }
 
@@ -1623,7 +1657,35 @@ fn dynamic_collider(
     vy: f64,
     material: Material,
 ) -> Body {
-    dynamic_collider_with_spin(id, x, y, angle, collider, vx, vy, 0.0, material)
+    dynamic_collider_with_mass(id, x, y, angle, collider, vx, vy, Mass::ONE, material)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dynamic_collider_with_mass(
+    id: u64,
+    x: f64,
+    y: f64,
+    angle: Angle,
+    collider: impl Into<Collider>,
+    vx: f64,
+    vy: f64,
+    mass: Mass,
+    material: Material,
+) -> Body {
+    Body::dynamic(
+        BodyId::new(id),
+        collider,
+        mass,
+        material,
+        BodyState::new(
+            Transform::new(
+                Position::from_meters(x, y).expect("scenario position must fit"),
+                angle,
+            ),
+            LinearVelocity::from_meters_per_second(vx, vy).expect("scenario velocity must fit"),
+            AngularVelocity::ZERO,
+        ),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2008,6 +2070,7 @@ mod tests {
             Scenario::BoxStackRestitution,
             Scenario::BoxPyramid,
             Scenario::DominoPyramid,
+            Scenario::DominoPyramidHeavyImpact,
             Scenario::CircleVsConvex,
             Scenario::ConvexVsConvex,
             Scenario::CompositePlayground,
@@ -2079,6 +2142,60 @@ mod tests {
         assert_eq!(first_leg.max().raw()[1], first_beam.min().raw()[1]);
         assert_eq!(first_beam.max().raw()[0], second_beam.min().raw()[0]);
         assert_eq!(first_beam.max().raw()[1], first_upper_leg.min().raw()[1]);
+    }
+
+    #[test]
+    fn heavy_projectile_targets_the_domino_pyramid_center_with_twenty_times_the_mass() {
+        const DOMINO_COUNT: usize = 10 * (10 + 2);
+
+        let world = build_world(Scenario::DominoPyramidHeavyImpact);
+        assert_eq!(world.bodies().len(), DOMINO_COUNT + 1);
+
+        let projectile = world.bodies().last().unwrap();
+        let projectile_id = projectile.id();
+        let expected_projectile = dynamic_collider_with_mass(
+            projectile.id().raw(),
+            -9.0,
+            5.5,
+            Angle::ZERO,
+            projectile.collider().clone(),
+            8.0,
+            0.0,
+            Mass::from_kilograms(20.0).unwrap(),
+            projectile.material(),
+        );
+        assert_eq!(
+            Mass::from_kilograms(20.0).unwrap().raw(),
+            Mass::ONE.raw() * 20
+        );
+        assert_eq!(projectile, &expected_projectile);
+        assert_eq!(
+            projectile.state().linear_velocity(),
+            LinearVelocity::from_meters_per_second(8.0, 0.0).unwrap()
+        );
+
+        let mut impacted_world = world;
+        let initial_projectile_x = projectile_x(&impacted_world);
+        let mut contact_seen = false;
+        for _ in 0..96 {
+            impacted_world.step();
+            contact_seen |= impacted_world
+                .contacts()
+                .any(|contact| contact.body_a == projectile_id || contact.body_b == projectile_id);
+        }
+        assert!(contact_seen, "heavy projectile did not reach the pyramid");
+        assert!(projectile_x(&impacted_world) > initial_projectile_x);
+    }
+
+    fn projectile_x(world: &World) -> f64 {
+        world
+            .bodies()
+            .last()
+            .unwrap()
+            .state()
+            .transform()
+            .position
+            .to_meters()[0]
     }
 
     fn assert_pyramid_layout(world: &World) {
